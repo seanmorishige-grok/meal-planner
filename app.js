@@ -31,10 +31,10 @@ async function rpc(fn, args = {}) {
   return body;
 }
 // mutation: optimistic local change, then server call, then refresh
-async function mutate(fn, args, optimistic) {
+async function mutate(fn, args, optimistic, onOk) {
   S.busy++; S.seq++;
   if (optimistic) { optimistic(); render(); }
-  try { await rpc(fn, args); }
+  try { await rpc(fn, args); if (onOk) onOk(); }
   catch (e) { handleErr(e); }
   finally { S.busy--; }
   await refresh(true);
@@ -55,6 +55,15 @@ async function refresh(force) {
     S.error = 'Offline — retrying…';
   }
   render();
+}
+
+// Fire-and-forget ping so the assistant reacts right away; failures are ignored (an hourly check is the fallback).
+function notifyAssistant(event, ids) {
+  try {
+    fetch(`${SUPABASE_URL}/functions/v1/notify`, { method: 'POST', keepalive: true,
+      headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: S.code, event, by: S.who, ...ids }) }).catch(() => {});
+  } catch (e) { /* ignore */ }
 }
 
 /* ---------- helpers ---------- */
@@ -295,8 +304,10 @@ document.addEventListener('click', async ev => {
     case 'rm': { mutate('remove_item', { p_item: id }, () => { d.items = d.items.filter(i => i.id !== id); }); break; }
     case 'send':
       el.disabled = true;
-      await mutate('set_week_status', { p_week: w.id, p_status: 'ready_for_cart', p_who: S.who }, () => { w.status = 'ready_for_cart'; w.sent_by = S.who; w.sent_at = new Date().toISOString(); });
-      toast('🛒 Sent! The cart gets filled next.'); break;
+      { let sent = false;
+        await mutate('set_week_status', { p_week: w.id, p_status: 'ready_for_cart', p_who: S.who }, () => { w.status = 'ready_for_cart'; w.sent_by = S.who; w.sent_at = new Date().toISOString(); }, () => { sent = true; });
+        if (sent) { notifyAssistant('send_to_cart', { week_id: w.id }); toast('🛒 Sent! The cart gets filled next.'); } }
+      break;
     case 'reopen': mutate('set_week_status', { p_week: w.id, p_status: 'pantry', p_who: S.who }, () => { w.status = 'pantry'; }); break;
     case 'verdict': { const r = d.recipes.find(x => x.id === id), v = el.dataset.v;
       mutate('recipe_verdict', { p_recipe: id, p_verdict: v, p_who: S.who }, () => { r.verdict = v; r.verdict_by = S.who; }); toast(v === 'keep' ? '👍 Keeping it' : '🔄 Marked to swap out'); break; }
@@ -419,7 +430,8 @@ async function savePhotos(btn) {
       if (!up.ok) throw new Error('photo ' + (i + 1) + ' failed to upload (' + up.status + ')');
     }
     btn.textContent = 'Saving…';
-    await rpc('add_recipe_photos', { p_paths: body.uploads.map(u => u.path), p_title: ($('#photoTitle').value || '').trim(), p_who: S.who });
+    const rid = await rpc('add_recipe_photos', { p_paths: body.uploads.map(u => u.path), p_title: ($('#photoTitle').value || '').trim(), p_who: S.who });
+    notifyAssistant('photo_recipe', { recipe_id: rid });
     closeSheet(); toast('📷 Saved — the assistant will type it up'); await refresh(true); render.force = true; render();
   } catch (e) {
     if (e.code === '28P01') { closeSheet(); return handleErr(e); }
