@@ -54,8 +54,8 @@
   }
   // Countable things: round up to halves when small, whole numbers otherwise
   function roundCount(n) {
-    if (n < 3) return Math.max(0.5, Math.ceil(n * 2 - 0.2) / 2);
-    return Math.max(1, Math.ceil(n - 0.2));
+    if (n < 1) return n <= 0.5 ? 0.5 : 1;
+    return Math.ceil(n - 0.15);
   }
   function fmtAmount(n, unit) {
     if (n == null) return '';
@@ -89,6 +89,7 @@
     if (/olive oil/.test(s)) s = 'olive oil';
     if (/^(garlic|garlic cloves?|cloves? garlic|minced garlic)$/.test(s)) s = 'garlic';
     if (/^parmesan( cheese)?$/.test(s)) s = 'parmesan cheese';
+    if (/^onions?$/.test(s)) s = 'yellow onion';
     return s || (item || '').toLowerCase().trim();
   }
   function keyOf(name) { return name.replace(/(?<!s)s\b/g, '').replace(/es\b/, ''); }

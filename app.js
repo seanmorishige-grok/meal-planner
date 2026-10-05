@@ -225,7 +225,7 @@ function listView() {
 }
 function actionBar() {
   const st = weekStatus(); if (!st) return '';
-  let main = '', back = S.step > 0 ? `<button class="btn ghost" data-act="go" data-step="${S.step - 1}">←</button>` : '';
+  let main = '', back = S.step > 0 ? `<button class="btn ghost back" data-act="go" data-step="${S.step - 1}" aria-label="back">←</button>` : '';
   if (S.step === 0) {
     const n = picked().length;
     main = locked() ? `<button class="btn ghost" data-act="go" data-step="3">See the list →</button>`
