@@ -159,7 +159,12 @@ function locked() { return ['ready_for_cart', 'carted'].includes(weekStatus()); 
 function pickView() {
   const opts = S.data.options || [], n = picked().length;
   const msg = n === 0 ? 'Tap the meals you want — aim for 3.' : n < 3 ? `${n} picked — ${3 - n} more to go.` : n === 3 ? '3 picked — perfect! 🎉' : `${n} picked (that's more than 3 — fine if you're hungry!)`;
-  return `<h2>Pick this week's meals</h2><p class="hint">${msg}</p>` + opts.map(o => {
+  const pickedNames = picked().map(o => esc(o.title)).join(' · ');
+  const more = S.data.more_available || 0;
+  const moreBtn = locked() ? '' : more > 0
+    ? `<button class="btn ghost" data-act="more" style="margin:6px 0 4px">➕ More recipes <small style="font-weight:500;opacity:.75">(${Math.min(6, more)} more from the library)</small></button>`
+    : `<div class="empty" style="padding:18px 8px"><p>That's all for now — add a recipe link in the <a href="#" data-tab="recipes">Recipes tab</a>.</p></div>`;
+  return `<h2>Pick this week's meals</h2><p class="hint">${msg}${pickedNames ? `<br><b style="color:var(--accent-dark)">✓ ${pickedNames}</b>` : ''}</p>` + opts.map(o => {
     const open = S.open[o.recipe_id] ?? false;
     const factor = o.servings / (o.base_servings || 6);
     return `<div class="card ${o.picked ? 'picked' : ''}">
@@ -177,7 +182,7 @@ function pickView() {
         ${open ? `<ul class="ings">${(o.ingredients || []).map(i => { const s = Ingredients.scaleOne(i, factor); return `<li><span class="q">${esc(s.qty)}</span><span>${esc(s.item)}</span></li>`; }).join('')}</ul>` : ''}
       </div>` : ''}
     </div>`;
-  }).join('');
+  }).join('') + moreBtn;
 }
 
 function itemRows(items, kind) {
@@ -260,7 +265,7 @@ function recipesView() {
 document.addEventListener('click', async ev => {
   const el = ev.target.closest('[data-act],[data-tab],[data-step]'); if (!el || el.disabled) return;
   const d = S.data, w = d && d.week, id = +el.dataset.id;
-  if (el.dataset.tab) { S.tab = el.dataset.tab; render.force = true; render(); window.scrollTo(0, 0); return; }
+  if (el.dataset.tab) { ev.preventDefault(); S.tab = el.dataset.tab; render.force = true; render(); window.scrollTo(0, 0); return; }
   const act = el.dataset.act;
   if (!act && el.dataset.step != null) { S.step = +el.dataset.step; render.force = true; render(); window.scrollTo(0, 0); return; }
   const opt = () => d.options.find(o => o.recipe_id === id), item = () => d.items.find(i => i.id === id);
@@ -271,6 +276,12 @@ document.addEventListener('click', async ev => {
       mutate('set_pick', { p_week: w.id, p_recipe: id, p_picked: v }, () => { o.picked = v; if (w.status === 'pantry') w.status = 'picking'; }); break; }
     case 'serv': { const o = opt(); const v = Math.max(1, Math.min(30, o.servings + +el.dataset.d));
       mutate('set_servings', { p_week: w.id, p_recipe: id, p_servings: v }, () => { o.servings = v; if (w.status === 'pantry') w.status = 'picking'; }); break; }
+    case 'more': {
+      el.disabled = true; el.textContent = 'Finding more recipes…';
+      S.busy++; S.seq++;
+      try { const n = await rpc('add_more_options', { p_week: w.id, p_count: 6 }); toast(n ? `Added ${n} more recipe${n > 1 ? 's' : ''} 🍲` : "That's all the recipes for now"); }
+      catch (e) { handleErr(e); } finally { S.busy--; }
+      await refresh(true); break; }
     case 'toggleIngs': S.open[id] = !S.open[id]; render(); break;
     case 'confirm': {
       const items = Ingredients.combine(d.options).map(({ name, qty, category, have_it }) => ({ name, qty, category, have_it }));
