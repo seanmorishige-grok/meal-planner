@@ -142,3 +142,5 @@ label.btn{cursor:pointer;display:flex;align-items:center;justify-content:center}
 .b-snack{background:#f3e8f7;color:#7a4a8c}
 .chip:has(input:checked){border-color:var(--accent);background:var(--accent-soft);color:var(--accent-dark)}
 label.chip{cursor:pointer;display:inline-flex;align-items:center}
+.row .name b .src{font-weight:400;color:var(--muted);font-size:14px}
+.row.dim .name b .src{text-decoration:none}

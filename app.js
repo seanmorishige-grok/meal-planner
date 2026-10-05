@@ -199,15 +199,25 @@ function pickView() {
   }).join('') + moreBtn + `<div style="text-align:center;margin-top:14px"><button class="linkbtn" data-act="startOver" style="color:var(--muted);font-weight:500">↺ Start over</button></div>`;
 }
 
+// "(for Bolognese, Piccata)" / "(staple)" / "(added by Sean)" shown after an item's name
+function srcLabel(i, kind) {
+  if (i.source === 'recipe') return i.recipes && i.recipes.length ? `for ${i.recipes.join(', ')}` : '';
+  if (i.source === 'custom') return `added by ${i.added_by || '?'}`;
+  return kind === 'list' ? 'staple' : '';
+}
+function nameHtml(i, kind) {
+  const src = srcLabel(i, kind);
+  return `<b>${esc(i.name)}${src ? ` <span class="src">(${esc(src)})</span>` : ''}</b>`;
+}
 function itemRows(items, kind) {
   return groupBy(items).map(([cat, list]) => `<div class="group">${CAT_LABEL[cat] || esc(cat)}</div><div class="list">${list.map(i => {
-    if (kind === 'pantry') return `<div class="row ${i.have_it ? 'dim' : ''}"><div class="name"><b>${esc(i.name)}</b><small>${esc(i.qty || '')}</small></div>
+    if (kind === 'pantry') return `<div class="row ${i.have_it ? 'dim' : ''}"><div class="name">${nameHtml(i, kind)}<small>${esc(i.qty || '')}</small></div>
       <button class="toggle ${i.have_it ? 'on' : ''}" data-act="have" data-id="${i.id}" aria-pressed="${i.have_it}" ${locked() ? 'disabled' : ''}>${i.have_it ? '✓ Have it' : 'Have it?'}</button></div>`;
-    if (kind === 'staple') return `<div class="row ${i.include ? '' : 'dim'}"><div class="name"><b>${esc(i.name)}</b><small>${esc(stapleProduct(i))}</small></div>
+    if (kind === 'staple') return `<div class="row ${i.include ? '' : 'dim'}"><div class="name">${nameHtml(i, kind)}<small>${i.source === 'custom' ? '' : esc(stapleProduct(i))}</small></div>
       <input class="qtyin" data-act="qty" data-id="${i.id}" value="${esc(i.qty || '')}" aria-label="quantity" ${locked() ? 'disabled' : ''}>
       ${i.source === 'custom' && !locked() ? `<button class="x" data-act="rm" data-id="${i.id}" aria-label="remove">✕</button>` : ''}
       <button class="toggle add ${i.include ? 'on' : ''}" data-act="inc" data-id="${i.id}" aria-pressed="${i.include}" ${locked() ? 'disabled' : ''}>${i.include ? '✓ Buy' : 'Skip'}</button></div>`;
-    return `<div class="row"><div class="name"><b>${esc(i.name)}</b><small>${i.source === 'custom' ? 'added by ' + esc(i.added_by || '') : i.source === 'staple' ? 'staple' : ''}</small></div><span class="qty">${esc(i.qty || '')}</span></div>`;
+    return `<div class="row"><div class="name">${nameHtml(i, kind)}</div><span class="qty">${esc(i.qty || '')}</span></div>`;
   }).join('')}</div>`).join('');
 }
 function stapleProduct(i) {
@@ -347,7 +357,7 @@ document.addEventListener('click', async ev => {
       await refresh(true); break; }
     case 'toggleIngs': S.open[id] = !S.open[id]; render(); break;
     case 'confirm': {
-      const items = Ingredients.combine(d.options).map(({ name, qty, category, have_it }) => ({ name, qty, category, have_it }));
+      const items = Ingredients.combine(d.options).map(({ name, qty, category, have_it, recipes }) => ({ name, qty, category, have_it, recipes }));
       el.disabled = true; el.textContent = 'Building list…';
       await mutate('confirm_portions', { p_week: w.id, p_items: items, p_who: S.who });
       S.step = 1; render.force = true; render(); window.scrollTo(0, 0); toast('Portions confirmed ✓'); break; }
