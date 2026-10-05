@@ -11,7 +11,7 @@ const STEPS = ['Pick', 'Pantry', 'Staples', 'List'];
 const S = {
   code: localStorage.getItem('mp_code') || '',
   who: localStorage.getItem('mp_who') || '',
-  data: null, tab: 'week', step: null, open: {}, busy: 0, seq: 0, lastSync: null, error: null,
+  data: null, tab: 'week', step: null, open: {}, batches: {}, busy: 0, seq: 0, lastSync: null, error: null,
 };
 
 /* ---------- api ---------- */
@@ -93,12 +93,13 @@ function render() {
   render.force = false;
   if (!S.code || !S.who) { app.innerHTML = loginView(); return bindLogin(); }
   if (!S.data) { app.innerHTML = '<div class="boot">🥕</div>'; return; }
-  const body = S.tab === 'recipes' ? recipesView() : weekView();
+  const body = S.tab === 'recipes' ? recipesView() : S.tab === 'quick' ? quickView() : weekView();
   app.innerHTML = `<div class="wrap">${body}
     <div class="sync">${S.error ? esc(S.error) : S.lastSync ? 'Synced ' + S.lastSync.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' }) : ''}</div></div>
-    ${S.tab === 'week' ? actionBar() : ''}
+    ${S.tab === 'week' ? actionBar() : S.tab === 'quick' ? quickActionBar() : ''}
     <nav class="tabbar">
       <button data-tab="week" class="${S.tab === 'week' ? 'on' : ''}"><span>🍽️</span>This week</button>
+      <button data-tab="quick" class="${S.tab === 'quick' ? 'on' : ''}"><span>🛒</span>Quick order${S.data.quick && S.data.quick.status === 'picking' ? ' •' : ''}</button>
       <button data-tab="recipes" class="${S.tab === 'recipes' ? 'on' : ''}"><span>📖</span>Recipes</button>
     </nav>`;
 }
@@ -163,7 +164,11 @@ function weekView() {
 function statusLabel(st) {
   return { picking: 'Picking meals', pantry: 'Checking pantry & staples', ready_for_cart: 'Sent to cart', carted: 'Carted' }[st] || st;
 }
-function locked() { return ['ready_for_cart', 'carted'].includes(weekStatus()); }
+function locked() {
+  if (S.tab === 'quick') { const q = S.data && S.data.quick; return !q || q.status !== 'picking'; }
+  return ['ready_for_cart', 'carted'].includes(weekStatus());
+}
+function allItems() { return [...(S.data.items || []), ...((S.data.quick && S.data.quick.items) || [])]; }
 
 function pickView() {
   const opts = S.data.options || [], n = picked().length;
@@ -216,6 +221,14 @@ function pantryView() {
   const need = items.filter(i => !i.have_it).length;
   return `<h2>Pantry check</h2><p class="hint">Tap <b>Have it</b> for anything already in the kitchen. ${need} of ${items.length} to buy.</p>` + itemRows(items, 'pantry');
 }
+function addItemForm(id) {
+  const cats = CAT_ORDER.map(c => `<option value="${c}">${(CAT_LABEL[c] || c).replace(/^\S+\s/, '')}</option>`).join('');
+  return `<form id="${id}" class="list" style="padding:14px"><b>➕ Add an item</b>
+      <div class="addform"><input class="field" name="name" placeholder="e.g. paper towels" required>
+      <input class="field" name="qty" placeholder="qty" style="text-align:center">
+      <select class="field" name="category">${cats.replace('value="other"', 'value="other" selected')}</select>
+      <button class="btn small" type="submit">Add</button></div></form>`;
+}
 function staplesView() {
   const items = (S.data.items || []).filter(i => i.source !== 'recipe');
   const recurring = items.filter(i => i.source === 'custom' || (S.data.staples || []).some(s => s.active && s.name.toLowerCase() === i.name.toLowerCase()));
@@ -254,10 +267,49 @@ function actionBar() {
   return `<div class="actionbar"><div class="inner">${back}${main}</div></div>`;
 }
 
+function quickView() {
+  const q = S.data.quick;
+  const intro = `<p class="hint">A staples-only order (milk, eggs, fruit, snacks…) that doesn't touch this week's meal plan.</p>`;
+  if (!q) return header('Quick order') + intro + `<div class="empty"><div class="e">🛒</div><p>Need a few groceries now?</p></div>
+    <button class="btn" data-act="quickStart">Start a quick order</button>`;
+  const items = q.items || [];
+  const fromRecipes = items.filter(i => i.source === 'recipe'), staples = items.filter(i => i.source !== 'recipe');
+  const buy = items.filter(i => i.include && !i.have_it);
+  const added = (q.quick_recipes || []).map(r => `${esc(r.title)} ×${+r.batches}`).join(' · ');
+  if (q.status === 'ready_for_cart') return header('Quick order', 'Sent to cart') +
+    `<div class="banner ok"><span class="big">🛒 Sent to cart</span>by ${esc(q.sent_by || '?')} · ${q.sent_at ? fmtWhen(q.sent_at) : ''}. The QFC cart gets filled next.</div>
+     <h2>${buy.length} items</h2>${added ? `<p class="hint">Includes: ${added}</p>` : ''}${itemRows(buy, 'list')}
+     <button class="btn ghost" data-act="quickStart" style="margin-top:18px">Start another quick order</button>`;
+  return header('Quick order', `${buy.length} item${buy.length === 1 ? '' : 's'} to buy`) + intro +
+    (fromRecipes.length ? `<div class="group" style="font-size:15px;color:var(--ink)">From snacks & baking${added ? ` <small style="text-transform:none;letter-spacing:0;font-weight:500;color:var(--muted)">(${added})</small>` : ''}</div>
+      <p class="hint" style="margin:4px 0 0">Tap <b>Have it</b> for anything already in the kitchen.</p>${itemRows(fromRecipes, 'pantry')}` : '') +
+    `<div style="margin-top:18px">${addItemForm('addFormQuick')}</div>
+     <div class="group" style="font-size:15px;color:var(--ink)">Staples</div>${itemRows(staples, 'staple')}
+     <div style="text-align:center;margin-top:16px"><button class="linkbtn" data-act="quickDiscard" style="color:var(--muted);font-weight:500">🗑 Discard this quick order</button></div>`;
+}
+function quickActionBar() {
+  const q = S.data.quick; if (!q) return '';
+  if (q.status === 'ready_for_cart') return `<div class="actionbar"><div class="inner"><button class="btn ghost" data-act="quickReopen">↩︎ Reopen to edit</button></div></div>`;
+  const n = (q.items || []).filter(i => i.include && !i.have_it).length;
+  return `<div class="actionbar"><div class="inner"><button class="btn green huge" data-act="quickSend" ${n ? '' : 'disabled'}>🛒 Send to cart${n ? ` (${n})` : ''}</button></div></div>`;
+}
+function snackCard(r) {
+  const b = S.batches[r.id] || 1;
+  return `<div class="rcard"><span class="badge b-${esc(r.status)}">${esc(r.status)}</span> <span class="badge b-snack">Snack/baking</span>
+    <div class="card-title" style="margin-top:6px">${esc(r.title)}</div>
+    <div class="meta"><span>⏱ ${esc(r.total_time || '?')}</span><span>Makes ${r.servings || '?'} per batch</span>${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">Recipe ↗</a>` : ''}</div>
+    <div class="serv"><div class="serv-label">Batches</div>
+      <div class="stepper"><button data-act="batch" data-id="${r.id}" data-d="-1" aria-label="fewer batches">−</button><span>${b}</span><button data-act="batch" data-id="${r.id}" data-d="1" aria-label="more batches">+</button></div></div>
+    <button class="btn small" data-act="snackAdd" data-id="${r.id}" ${(r.ingredients || []).length ? '' : 'disabled'}>🛒 Add ingredients to order</button></div>`;
+}
 function recipesView() {
-  const rs = S.data.recipes || [];
-  return header('Recipes', `${rs.filter(r => r.status !== 'pending').length} in the library`) + `
+  const all = S.data.recipes || [];
+  const snacks = all.filter(r => r.recipe_type === 'snack/baking' && r.status !== 'pending' && r.status !== 'retired');
+  const rs = all.filter(r => !snacks.includes(r));
+  return header('Recipes', `${all.filter(r => r.status !== 'pending').length} in the library`) + `
     <button class="btn" data-act="addRecipe" style="margin:0 0 18px">➕ Add recipe</button>` +
+    (snacks.length ? `<div class="group" style="font-size:15px;color:var(--ink);margin-top:4px">🧁 Snacks & Baking</div>${snacks.map(snackCard).join('')}
+      <div class="group" style="font-size:15px;color:var(--ink);margin-top:22px">🍽️ Dinners</div>` : '') +
     rs.map(r => r.status === 'pending' && r.photo_count ? `<div class="rcard"><span class="badge b-pending">📷 Processing…</span>
         <div class="card-title" style="margin-top:6px">${esc(r.title)}</div>
         <div class="meta">${r.photo_count} photo${r.photo_count > 1 ? 's' : ''} · added by ${esc(r.added_by || '?')} — the assistant will type it up and add it to the library.</div></div>`
@@ -279,7 +331,7 @@ document.addEventListener('click', async ev => {
   if (el.dataset.tab) { ev.preventDefault(); S.tab = el.dataset.tab; render.force = true; render(); window.scrollTo(0, 0); return; }
   const act = el.dataset.act;
   if (!act && el.dataset.step != null) { S.step = +el.dataset.step; render.force = true; render(); window.scrollTo(0, 0); return; }
-  const opt = () => d.options.find(o => o.recipe_id === id), item = () => d.items.find(i => i.id === id);
+  const opt = () => d.options.find(o => o.recipe_id === id), item = () => allItems().find(i => i.id === id);
   switch (act) {
     case 'go': S.step = +el.dataset.step; render.force = true; render(); window.scrollTo(0, 0); break;
     case 'pick': { const o = opt(); const v = !o.picked;
@@ -301,7 +353,7 @@ document.addEventListener('click', async ev => {
       S.step = 1; render.force = true; render(); window.scrollTo(0, 0); toast('Portions confirmed ✓'); break; }
     case 'have': { const i = item(); const v = !i.have_it; mutate('set_item', { p_item: id, p_have_it: v, p_include: null, p_qty: null }, () => { i.have_it = v; }); break; }
     case 'inc': { const i = item(); const v = !i.include; mutate('set_item', { p_item: id, p_have_it: null, p_include: v, p_qty: null }, () => { i.include = v; }); break; }
-    case 'rm': { mutate('remove_item', { p_item: id }, () => { d.items = d.items.filter(i => i.id !== id); }); break; }
+    case 'rm': { mutate('remove_item', { p_item: id }, () => { d.items = d.items.filter(i => i.id !== id); if (d.quick) d.quick.items = d.quick.items.filter(i => i.id !== id); }); break; }
     case 'send':
       el.disabled = true;
       { let sent = false;
@@ -313,30 +365,47 @@ document.addEventListener('click', async ev => {
       mutate('recipe_verdict', { p_recipe: id, p_verdict: v, p_who: S.who }, () => { r.verdict = v; r.verdict_by = S.who; }); toast(v === 'keep' ? '👍 Keeping it' : '🔄 Marked to swap out'); break; }
     case 'menu': showMenu(); break;
     case 'addRecipe': openAddSheet(); break;
+    case 'quickStart': { let qid = null; S.busy++; S.seq++;
+      try { qid = await rpc('quick_start', { p_who: S.who }); } catch (e) { handleErr(e); } finally { S.busy--; }
+      await refresh(true); render.force = true; render(); window.scrollTo(0, 0); break; }
+    case 'quickSend': { const q = d.quick; let ok = false; el.disabled = true;
+      await mutate('quick_send', { p_id: q.id, p_who: S.who }, () => { q.status = 'ready_for_cart'; q.sent_by = S.who; q.sent_at = new Date().toISOString(); }, () => { ok = true; });
+      if (ok) { notifyAssistant('send_to_cart', { week_id: q.id }); toast('🛒 Quick order sent!'); } break; }
+    case 'quickReopen': mutate('quick_reopen', { p_id: d.quick.id }, () => { d.quick.status = 'picking'; }); break;
+    case 'quickDiscard': if (window.confirm('Discard this quick order?')) mutate('quick_discard', { p_id: d.quick.id }, () => { d.quick = null; }); break;
+    case 'batch': S.batches[id] = Math.max(1, Math.min(12, (S.batches[id] || 1) + +el.dataset.d)); render(); break;
+    case 'snackAdd': {
+      const r = d.recipes.find(x => x.id === id), b = S.batches[id] || 1;
+      const items = Ingredients.combine([{ picked: true, title: r.title, servings: (r.servings || 1) * b, base_servings: r.servings || 1, ingredients: r.ingredients || [] }])
+        .map(({ name, qty, category, have_it }) => ({ name, qty, category, have_it }));
+      let ok = false; el.disabled = true; el.textContent = 'Adding…';
+      await mutate('quick_add_recipe', { p_recipe: id, p_batches: b, p_items: items, p_who: S.who }, null, () => { ok = true; });
+      if (ok) { toast(`Added ${r.title} ×${b} to the quick order`); S.tab = 'quick'; render.force = true; render(); window.scrollTo(0, 0); }
+      break; }
     case 'startOver': startOver(); break;
   }
 });
 document.addEventListener('change', ev => {
   const el = ev.target; if (el.dataset.act !== 'qty') return;
-  const id = +el.dataset.id, i = S.data.items.find(x => x.id === id), v = el.value.trim();
+  const id = +el.dataset.id, i = allItems().find(x => x.id === id), v = el.value.trim();
   el.blur();
   mutate('set_item', { p_item: id, p_have_it: null, p_include: null, p_qty: v }, () => { i.qty = v; });
 });
 document.addEventListener('keydown', ev => { if (ev.key === 'Enter' && ev.target.dataset.act === 'qty') ev.target.blur(); });
 document.addEventListener('submit', async ev => {
   const f = ev.target;
-  if (f.id === 'addForm') {
+  if (f.id === 'addForm' || f.id === 'addFormQuick') {
     ev.preventDefault();
     const fd = new FormData(f), name = fd.get('name').trim(); if (!name) return;
     document.activeElement && document.activeElement.blur();
-    await mutate('add_item', { p_week: S.data.week.id, p_name: name, p_qty: fd.get('qty'), p_category: fd.get('category'), p_who: S.who });
+    await mutate('add_item', { p_week: f.id === 'addFormQuick' ? S.data.quick.id : S.data.week.id, p_name: name, p_qty: fd.get('qty'), p_category: fd.get('category'), p_who: S.who });
     toast('Added ' + name); render.force = true; render();
   } else if (f.id === 'urlForm') {
     ev.preventDefault();
-    const url = new FormData(f).get('url').trim();
+    const url = new FormData(f).get('url').trim(), rtype = new FormData(f).get('rtype') || 'dinner';
     document.activeElement && document.activeElement.blur();
     closeSheet();
-    await mutate('add_recipe_url', { p_url: url, p_who: S.who });
+    await mutate('add_recipe_url', { p_url: url, p_who: S.who, p_type: rtype });
     toast('📖 Added — ingredients coming soon'); render.force = true; render();
   }
 });
@@ -379,11 +448,16 @@ function openAddSheet(mode = 'choose') {
       <button class="btn ghost" data-sheet="photo">📷 Photo of a recipe <small style="font-weight:500;opacity:.75">(cookbook, card…)</small></button>
       <button class="btn" data-sheet="close" style="margin-top:16px">Cancel</button></div>`;
   if (mode === 'link') bg.innerHTML = `<div class="sheet"><h2 style="margin-top:0">🔗 Add by link</h2>
-      <form id="urlForm" class="urlform"><input class="field" name="url" type="url" inputmode="url" placeholder="https://…" required autofocus>
+      <form id="urlForm" class="urlform"><div class="chips" style="margin:6px 0 10px" role="radiogroup" aria-label="Recipe type">
+        <label class="chip"><input type="radio" name="rtype" value="dinner" checked hidden>🍽️ Dinner</label>
+        <label class="chip"><input type="radio" name="rtype" value="snack/baking" hidden>🧁 Snack / baking</label></div><input class="field" name="url" type="url" inputmode="url" placeholder="https://…" required autofocus>
       <button class="btn" type="submit">Add recipe</button></form>
       <button class="btn ghost" data-sheet="close">Cancel</button></div>`;
   if (mode === 'photo') { bg.innerHTML = `<div class="sheet" style="max-height:92vh;overflow:auto"><h2 style="margin-top:0">📷 Recipe from photos</h2>
       <p class="hint" style="margin-bottom:10px">Add every page (e.g. the page and its continuation). The assistant types it up.</p>
+      <form id="photoTypeForm" onsubmit="return false"><div class="chips" style="margin:6px 0 10px" role="radiogroup" aria-label="Recipe type">
+        <label class="chip"><input type="radio" name="rtype" value="dinner" checked hidden>🍽️ Dinner</label>
+        <label class="chip"><input type="radio" name="rtype" value="snack/baking" hidden>🧁 Snack / baking</label></div></form>
       <input class="field" id="photoTitle" placeholder="Recipe name (optional)" autocomplete="off">
       <div id="thumbs" class="thumbs"></div>
       <div style="display:flex;gap:8px">
@@ -443,7 +517,8 @@ async function savePhotos(btn) {
       if (!up.ok) throw new Error('photo ' + (i + 1) + ' failed to upload (' + up.status + ')');
     }
     btn.textContent = 'Saving…';
-    const rid = await rpc('add_recipe_photos', { p_paths: body.uploads.map(u => u.path), p_title: ($('#photoTitle').value || '').trim(), p_who: S.who });
+    const ptype = (document.querySelector('#photoTypeForm input[name=rtype]:checked') || {}).value || 'dinner';
+    const rid = await rpc('add_recipe_photos', { p_paths: body.uploads.map(u => u.path), p_title: ($('#photoTitle').value || '').trim(), p_who: S.who, p_type: ptype });
     notifyAssistant('photo_recipe', { recipe_id: rid });
     closeSheet(); toast('📷 Saved — the assistant will type it up'); await refresh(true); render.force = true; render();
   } catch (e) {
