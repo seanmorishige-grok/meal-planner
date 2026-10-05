@@ -191,7 +191,7 @@ function pickView() {
         ${open ? `<ul class="ings">${(o.ingredients || []).map(i => { const s = Ingredients.scaleOne(i, factor); return `<li><span class="q">${esc(s.qty)}</span><span>${esc(s.item)}</span></li>`; }).join('')}</ul>` : ''}
       </div>` : ''}
     </div>`;
-  }).join('') + moreBtn;
+  }).join('') + moreBtn + `<div style="text-align:center;margin-top:14px"><button class="linkbtn" data-act="startOver" style="color:var(--muted);font-weight:500">↺ Start over</button></div>`;
 }
 
 function itemRows(items, kind) {
@@ -313,6 +313,7 @@ document.addEventListener('click', async ev => {
       mutate('recipe_verdict', { p_recipe: id, p_verdict: v, p_who: S.who }, () => { r.verdict = v; r.verdict_by = S.who; }); toast(v === 'keep' ? '👍 Keeping it' : '🔄 Marked to swap out'); break; }
     case 'menu': showMenu(); break;
     case 'addRecipe': openAddSheet(); break;
+    case 'startOver': startOver(); break;
   }
 });
 document.addEventListener('change', ev => {
@@ -342,6 +343,7 @@ document.addEventListener('submit', async ev => {
 function showMenu() {
   const bg = document.createElement('div'); bg.className = 'sheet-bg';
   bg.innerHTML = `<div class="sheet"><b>Signed in as ${esc(S.who)}</b>
+    ${S.data && S.data.week ? '<button class="btn ghost" data-m="reset">↺ Start this week over</button>' : ''}
     <button class="btn ghost" data-m="who">Switch person</button>
     <button class="btn ghost" data-m="out">Forget passcode on this phone</button>
     <button class="btn" data-m="close">Close</button></div>`;
@@ -350,8 +352,19 @@ function showMenu() {
     bg.remove();
     if (m === 'who') { localStorage.removeItem('mp_who'); S.who = ''; render.force = true; render(); }
     if (m === 'out') logout('');
+    if (m === 'reset') startOver();
   };
   document.body.appendChild(bg);
+}
+
+async function startOver() {
+  const w = S.data && S.data.week; if (!w) return;
+  if (!window.confirm('Clear all picks, pantry checks and staples for this week?')) return;
+  let ok = false;
+  await mutate('reset_week', { p_week: w.id }, () => {
+    S.data.options.forEach(o => { o.picked = false; o.servings = 6; }); S.data.items = []; w.status = 'picking'; w.sent_by = null; w.sent_at = null;
+  }, () => { ok = true; });
+  if (ok) { S.step = 0; S.open = {}; render.force = true; render(); window.scrollTo(0, 0); toast('↺ Fresh start for this week'); }
 }
 
 /* ---------- add recipe: link or photos ---------- */
