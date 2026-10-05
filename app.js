@@ -248,9 +248,11 @@ function actionBar() {
 function recipesView() {
   const rs = S.data.recipes || [];
   return header('Recipes', `${rs.filter(r => r.status !== 'pending').length} in the library`) + `
-    <form id="urlForm" class="urlform"><input class="field" name="url" type="url" inputmode="url" placeholder="Paste a recipe link to add it" required>
-      <button class="btn small" type="submit">➕ Add recipe</button></form>` +
-    rs.map(r => r.status === 'pending' ? `<div class="rcard"><span class="badge b-pending">Importing soon</span>
+    <button class="btn" data-act="addRecipe" style="margin:0 0 18px">➕ Add recipe</button>` +
+    rs.map(r => r.status === 'pending' && r.photo_count ? `<div class="rcard"><span class="badge b-pending">📷 Processing…</span>
+        <div class="card-title" style="margin-top:6px">${esc(r.title)}</div>
+        <div class="meta">${r.photo_count} photo${r.photo_count > 1 ? 's' : ''} · added by ${esc(r.added_by || '?')} — the assistant will type it up and add it to the library.</div></div>`
+      : r.status === 'pending' ? `<div class="rcard"><span class="badge b-pending">Importing soon</span>
         <div class="card-title" style="margin-top:6px;word-break:break-all;font-size:15px">${esc(r.url)}</div>
         <div class="meta">Added by ${esc(r.added_by || '?')} — ingredients get filled in by the assistant.${r.notes ? ' ' + esc(r.notes) : ''}</div></div>`
       : `<div class="rcard"><span class="badge b-${esc(r.status)}">${esc(r.status)}</span>
@@ -299,6 +301,7 @@ document.addEventListener('click', async ev => {
     case 'verdict': { const r = d.recipes.find(x => x.id === id), v = el.dataset.v;
       mutate('recipe_verdict', { p_recipe: id, p_verdict: v, p_who: S.who }, () => { r.verdict = v; r.verdict_by = S.who; }); toast(v === 'keep' ? '👍 Keeping it' : '🔄 Marked to swap out'); break; }
     case 'menu': showMenu(); break;
+    case 'addRecipe': openAddSheet(); break;
   }
 });
 document.addEventListener('change', ev => {
@@ -320,6 +323,7 @@ document.addEventListener('submit', async ev => {
     ev.preventDefault();
     const url = new FormData(f).get('url').trim();
     document.activeElement && document.activeElement.blur();
+    closeSheet();
     await mutate('add_recipe_url', { p_url: url, p_who: S.who });
     toast('📖 Added — ingredients coming soon'); render.force = true; render();
   }
@@ -337,6 +341,90 @@ function showMenu() {
     if (m === 'out') logout('');
   };
   document.body.appendChild(bg);
+}
+
+/* ---------- add recipe: link or photos ---------- */
+const PHOTO = { blobs: [] };
+function closeSheet() { const el = document.querySelector('.sheet-bg.add'); if (el) el.remove(); PHOTO.blobs.forEach(b => URL.revokeObjectURL(b.url)); PHOTO.blobs = []; }
+function openAddSheet(mode = 'choose') {
+  let bg = document.querySelector('.sheet-bg.add');
+  if (!bg) { bg = document.createElement('div'); bg.className = 'sheet-bg add'; document.body.appendChild(bg);
+    bg.addEventListener('click', e => { if (e.target === bg) closeSheet(); }); }
+  if (mode === 'choose') bg.innerHTML = `<div class="sheet"><h2 style="margin-top:0">Add a recipe</h2>
+      <button class="btn ghost" data-sheet="link">🔗 Paste a link</button>
+      <button class="btn ghost" data-sheet="photo">📷 Photo of a recipe <small style="font-weight:500;opacity:.75">(cookbook, card…)</small></button>
+      <button class="btn" data-sheet="close" style="margin-top:16px">Cancel</button></div>`;
+  if (mode === 'link') bg.innerHTML = `<div class="sheet"><h2 style="margin-top:0">🔗 Add by link</h2>
+      <form id="urlForm" class="urlform"><input class="field" name="url" type="url" inputmode="url" placeholder="https://…" required autofocus>
+      <button class="btn" type="submit">Add recipe</button></form>
+      <button class="btn ghost" data-sheet="close">Cancel</button></div>`;
+  if (mode === 'photo') { bg.innerHTML = `<div class="sheet" style="max-height:92vh;overflow:auto"><h2 style="margin-top:0">📷 Recipe from photos</h2>
+      <p class="hint" style="margin-bottom:10px">Add every page (e.g. the page and its continuation). The assistant types it up.</p>
+      <input class="field" id="photoTitle" placeholder="Recipe name (optional)" autocomplete="off">
+      <div id="thumbs" class="thumbs"></div>
+      <div style="display:flex;gap:8px">
+        <label class="btn ghost small" style="flex:1;text-align:center">📷 Take photo<input type="file" accept="image/*" capture="environment" data-photo hidden></label>
+        <label class="btn ghost small" style="flex:1;text-align:center">🖼️ Library<input type="file" accept="image/*" multiple data-photo hidden></label>
+      </div>
+      <div class="err" id="photoErr"></div>
+      <button class="btn green" id="photoSave" data-sheet="savePhotos" disabled>Save recipe</button>
+      <button class="btn ghost" data-sheet="close">Cancel</button></div>`; drawThumbs(); }
+  bg.querySelectorAll('[data-sheet]').forEach(b => b.onclick = async e => {
+    e.preventDefault(); const m = b.dataset.sheet;
+    if (m === 'close') closeSheet(); else if (m === 'savePhotos') savePhotos(b); else openAddSheet(m);
+  });
+  bg.querySelectorAll('input[data-photo]').forEach(inp => inp.onchange = async () => {
+    const files = [...inp.files]; inp.value = '';
+    for (const f of files) {
+      if (PHOTO.blobs.length >= 10) { $('#photoErr').textContent = 'Up to 10 photos per recipe.'; break; }
+      try { const blob = await downscale(f); PHOTO.blobs.push({ blob, url: URL.createObjectURL(blob) }); }
+      catch (err) { $('#photoErr').textContent = 'Couldn’t read that image (' + (f.type || 'unknown type') + ').'; }
+      drawThumbs();
+    }
+  });
+}
+function drawThumbs() {
+  const t = $('#thumbs'); if (!t) return;
+  t.innerHTML = PHOTO.blobs.map((b, i) => `<div class="thumb"><img src="${b.url}" alt="page ${i + 1}"><span>${i + 1}</span>
+    <button type="button" data-rmphoto="${i}" aria-label="remove photo">✕</button></div>`).join('');
+  t.querySelectorAll('[data-rmphoto]').forEach(x => x.onclick = () => { const [r] = PHOTO.blobs.splice(+x.dataset.rmphoto, 1); URL.revokeObjectURL(r.url); drawThumbs(); });
+  const sv = $('#photoSave'); const n = PHOTO.blobs.length;
+  sv.disabled = !n; sv.textContent = n ? `Save recipe (${n} photo${n > 1 ? 's' : ''})` : 'Save recipe';
+}
+async function downscale(file, max = 1600) {
+  const src = URL.createObjectURL(file);
+  try {
+    const img = new Image(); img.src = src; await img.decode();
+    const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height); ctx.drawImage(img, 0, 0, c.width, c.height);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+    if (!blob) throw new Error('encode failed');
+    return blob;
+  } finally { URL.revokeObjectURL(src); }
+}
+async function savePhotos(btn) {
+  const n = PHOTO.blobs.length; if (!n) return;
+  const err = $('#photoErr'); err.textContent = ''; btn.disabled = true;
+  try {
+    btn.textContent = 'Preparing upload…';
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/photo-upload`, { method: 'POST',
+      headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: S.code, count: n }) });
+    const body = await res.json();
+    if (!res.ok) { const e = new Error(body.message || 'upload failed'); e.code = body.code; throw e; }
+    for (let i = 0; i < n; i++) {
+      btn.textContent = `Uploading ${i + 1} of ${n}…`;
+      const up = await fetch(body.uploads[i].upload_url, { method: 'PUT', headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'image/jpeg' }, body: PHOTO.blobs[i].blob });
+      if (!up.ok) throw new Error('photo ' + (i + 1) + ' failed to upload (' + up.status + ')');
+    }
+    btn.textContent = 'Saving…';
+    await rpc('add_recipe_photos', { p_paths: body.uploads.map(u => u.path), p_title: ($('#photoTitle').value || '').trim(), p_who: S.who });
+    closeSheet(); toast('📷 Saved — the assistant will type it up'); await refresh(true); render.force = true; render();
+  } catch (e) {
+    if (e.code === '28P01') { closeSheet(); return handleErr(e); }
+    err.textContent = '⚠️ ' + e.message; btn.disabled = false; drawThumbs();
+  }
 }
 
 /* ---------- sync loop ---------- */
