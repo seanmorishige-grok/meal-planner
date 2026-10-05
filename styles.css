@@ -144,3 +144,35 @@ label.btn{cursor:pointer;display:flex;align-items:center;justify-content:center}
 label.chip{cursor:pointer;display:inline-flex;align-items:center}
 .row .name b .src{font-weight:400;color:var(--muted);font-size:14px}
 .row.dim .name b .src{text-decoration:none}
+
+/* meal calendar */
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:4px;background:var(--line);border-radius:14px;padding:4px;margin:0 0 14px}
+.seg button{border-radius:11px;padding:9px 6px;font-size:15px;font-weight:600;color:var(--muted);min-height:42px}
+.seg button.on{background:var(--card);color:var(--ink);box-shadow:var(--shadow)}
+.plan{margin:0 0 26px}
+.plan h2 small{display:block;font-size:14px;font-weight:500;color:var(--muted);margin-top:2px}
+.tray{border:2px dashed var(--line);border-radius:var(--radius);padding:10px;margin:0 0 12px;background:var(--card)}
+.trayhead{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:0 0 8px}
+.days{display:flex;flex-direction:column;gap:8px}
+.day{display:grid;grid-template-columns:64px 1fr;gap:10px;align-items:start;background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:10px;border:2px solid transparent;min-height:56px}
+.day.today{border-color:var(--accent-soft)}
+.dayhead{display:flex;flex-direction:column;padding-top:4px}
+.dayhead b{font-size:16px}.dayhead small{color:var(--muted);font-size:12px}
+.daymeals{display:flex;flex-direction:column;gap:6px}
+.drop.target{border-color:var(--accent);border-style:dashed;cursor:pointer}
+.drop.over{border-color:var(--accent);border-style:solid;background:var(--accent-soft)}
+.none{color:var(--muted);font-size:14px;padding:6px 2px}
+.meal{background:var(--bg);border:2px solid var(--line);border-radius:12px;padding:8px 10px;cursor:pointer;user-select:none;-webkit-user-select:none}
+.tray .meal{margin:0 0 6px}
+.meal.sel{border-color:var(--accent);background:var(--accent-soft)}
+.meal.dragging{opacity:.4}
+.meal .mt{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}
+.meal .mt b{font-size:15px}
+.meal .mm{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 10px;color:var(--muted);font-size:13px;margin-top:2px}
+.flag{font-size:12px;font-weight:700;color:#8a4b14;background:#fdebc8;border-radius:999px;padding:2px 8px}
+.rlink{font-weight:600;font-size:13px}
+.selhint .linkbtn{margin-left:6px}
+.desk{display:none}
+@media (hover:hover) and (pointer:fine){.desk{display:inline}}
+.rsteps li,.ings li{margin:0 0 6px;line-height:1.4}
+.meal .rlink.linkbtn{padding:0;min-height:0;font-size:13px}

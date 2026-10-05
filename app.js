@@ -12,6 +12,7 @@ const S = {
   code: localStorage.getItem('mp_code') || '',
   who: localStorage.getItem('mp_who') || '',
   data: null, tab: 'week', step: null, open: {}, batches: {}, busy: 0, seq: 0, lastSync: null, error: null,
+  mode: null /* 'plan' | 'shop' on This week */, sel: null /* meal picked up for scheduling: {w, r} */, drag: null,
 };
 
 /* ---------- api ---------- */
@@ -90,13 +91,14 @@ function render() {
   // don't clobber a field the user is typing in
   const ae = document.activeElement;
   if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT') && app.contains(ae) && S.data && !render.force) return;
+  if (S.drag && S.data && !render.force) return; // don't rebuild the page mid-drag
   render.force = false;
   if (!S.code || !S.who) { app.innerHTML = loginView(); return bindLogin(); }
   if (!S.data) { app.innerHTML = '<div class="boot">🥕</div>'; return; }
   const body = S.tab === 'recipes' ? recipesView() : S.tab === 'quick' ? quickView() : weekView();
   app.innerHTML = `<div class="wrap">${body}
     <div class="sync">${S.error ? esc(S.error) : S.lastSync ? 'Synced ' + S.lastSync.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' }) : ''}</div></div>
-    ${S.tab === 'week' ? actionBar() : S.tab === 'quick' ? quickActionBar() : ''}
+    ${S.tab === 'week' && weekMode() === 'shop' ? actionBar() : S.tab === 'quick' ? quickActionBar() : ''}
     <nav class="tabbar">
       <button data-tab="week" class="${S.tab === 'week' ? 'on' : ''}"><span>🍽️</span>This week</button>
       <button data-tab="quick" class="${S.tab === 'quick' ? 'on' : ''}"><span>🛒</span>Quick order${S.data.quick && S.data.quick.status === 'picking' ? ' •' : ''}</button>
@@ -148,7 +150,79 @@ function logout(msg) {
   localStorage.removeItem('mp_code'); S.code = ''; S.data = null; S.loginErr = msg || ''; render.force = true; render();
 }
 
+/* ---------- meal calendar ("This week's plan") ---------- */
+const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const dayName = iso => new Date(iso + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
+function todayISO() { return new Date(S.data.server_time || Date.now()).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }); }
+function plans() { return (S.data && S.data.plans) || []; }
+function planLabel(p) {
+  const t = todayISO(), end = addDays(p.week_start, 6);
+  if (p.week_start <= t && t <= end) return "This week's plan";
+  if (p.week_start > t && p.week_start <= addDays(t, 7)) return "Next week's plan";
+  return 'Week of ' + fmtDate(p.week_start);
+}
+// Plan view is the default once the shown week is sent/carted, or while a sent plan covers today; picking stays one tap away.
+function weekMode() {
+  if (!plans().length) return 'shop';
+  if (S.mode) return S.mode;
+  const t = todayISO();
+  return locked() || plans().some(p => p.week_start <= t && t <= addDays(p.week_start, 6)) ? 'plan' : 'shop';
+}
+function modeToggle() {
+  if (!plans().length) return '';
+  const m = weekMode();
+  return `<div class="seg"><button class="${m === 'plan' ? 'on' : ''}" data-act="mode" data-mode="plan">📅 Plan</button><button class="${m === 'shop' ? 'on' : ''}" data-act="mode" data-mode="shop">🛒 Picks & list</button></div>`;
+}
+function mealChip(p, m) {
+  const sel = S.sel && S.sel.w === p.week_id && S.sel.r === m.recipe_id;
+  const link = m.url ? `<a class="rlink" href="${esc(m.url)}" target="_blank" rel="noopener">Recipe ↗</a>`
+    : `<button class="rlink linkbtn" data-act="showRecipe" data-id="${m.recipe_id}">Recipe →</button>`;
+  return `<div class="meal ${sel ? 'sel' : ''}" draggable="true" role="button" tabindex="0" data-act="selMeal" data-week="${p.week_id}" data-id="${m.recipe_id}" aria-pressed="${sel}">
+    <div class="mt"><b>${esc(m.title)}</b>${m.long_cook ? `<span class="flag" title="Long cook: ${esc(m.total_time || '')}">⏳ Long cook</span>` : ''}</div>
+    <div class="mm"><span>Serves ${m.servings}${m.total_time ? ' · ' + esc(m.total_time) : ''}</span>${link}</div></div>`;
+}
+function planSection(p) {
+  const end = addDays(p.week_start, 6), t = todayISO(), days = [0, 1, 2, 3, 4, 5, 6].map(n => addDays(p.week_start, n));
+  const on = d => p.meals.filter(m => m.planned_date === d);
+  const tray = p.meals.filter(m => !m.planned_date || m.planned_date < p.week_start || m.planned_date > end);
+  const picking = S.sel && S.sel.w === p.week_id;
+  const selMeal = picking && p.meals.find(m => m.recipe_id === S.sel.r);
+  return `<section class="plan"><h2>${planLabel(p)} <small>${fmtDate(p.week_start)} – ${fmtDate(end)}${p.status === 'carted' ? ' · carted' : ' · sent to cart'}</small></h2>
+    ${picking && selMeal ? `<div class="banner info selhint">Now tap a day for <b>${esc(selMeal.title)}</b>${selMeal.planned_date ? ' (or the tray to unschedule it)' : ''}. <button class="linkbtn" data-act="selMeal" data-week="${p.week_id}" data-id="${selMeal.recipe_id}">Cancel</button></div>`
+      : `<p class="hint">Tap a meal, then tap a day<span class="desk"> — or drag it</span>. Syncs to every phone.</p>`}
+    <div class="tray drop ${picking ? 'target' : ''}" data-act="dropTray" data-week="${p.week_id}"><div class="trayhead">Not scheduled yet${tray.length ? ` (${tray.length})` : ''}</div>
+      ${tray.length ? tray.map(m => mealChip(p, m)).join('') : `<div class="none">${p.meals.length ? 'Every meal has a day ✓' : 'No meals were picked for this week.'}</div>`}</div>
+    <div class="days">${days.map(d => `<div class="day drop ${d === t ? 'today' : ''} ${picking ? 'target' : ''}" data-act="dropDay" data-week="${p.week_id}" data-date="${d}">
+      <div class="dayhead"><b>${dayName(d)}</b><small>${fmtDate(d)}${d === t ? ' · today' : ''}</small></div>
+      <div class="daymeals">${on(d).map(m => mealChip(p, m)).join('') || `<span class="none">${picking ? 'Tap to put it here' : '—'}</span>`}</div></div>`).join('')}</div></section>`;
+}
+function planView() {
+  const ps = plans();
+  return header('Meal plan', ps.length > 1 ? 'This week and next' : planLabel(ps[0])) + modeToggle() + ps.map(planSection).join('');
+}
+// recipe sheet for recipes without a web link (typed-up photo recipes)
+async function showRecipe(id) {
+  let r; try { r = await rpc('get_recipe', { p_id: id }); } catch (e) { return handleErr(e); }
+  if (!r) return toast('Recipe not found');
+  const bg = document.createElement('div'); bg.className = 'sheet-bg';
+  bg.innerHTML = `<div class="sheet" style="max-height:88vh;overflow:auto"><h2 style="margin-top:0">${esc(r.title)}</h2>
+    <p class="hint">Serves ${esc(r.servings || '?')}${r.total_time ? ' · ' + esc(r.total_time) : ''}</p>
+    <h3>Ingredients</h3><ul class="ings">${(r.ingredients || []).map(i => `<li>${esc([i.qty, i.unit, i.item].filter(Boolean).join(' '))}</li>`).join('')}</ul>
+    ${(r.steps || []).length ? `<h3>Steps</h3><ol class="rsteps">${r.steps.map(t => `<li>${esc(typeof t === 'string' ? t : t.text || '')}</li>`).join('')}</ol>` : ''}
+    ${r.url ? `<p><a href="${esc(r.url)}" target="_blank" rel="noopener">Open original ↗</a></p>` : ''}
+    <button class="btn" data-close>Close</button></div>`;
+  bg.onclick = e => { if (e.target === bg || e.target.hasAttribute('data-close')) bg.remove(); };
+  document.body.appendChild(bg);
+}
+async function setPlanDay(w, r, date) {
+  S.sel = null;
+  const p = plans().find(x => x.week_id === w), m = p && p.meals.find(x => x.recipe_id === r);
+  if (!m || (m.planned_date || null) === (date || null)) { render.force = true; return render(); }
+  await mutate('set_plan_day', { p_week: w, p_recipe: r, p_date: date, p_who: S.who }, () => { m.planned_date = date; render.force = true; });
+}
+
 function weekView() {
+  if (weekMode() === 'plan') return planView();
   const w = S.data.week;
   if (!w) return header('This week') + `<div class="empty"><div class="e">🗓️</div><p>No week is planned yet.<br>Options will show up here when they're posted.</p></div>`;
   if (S.step == null) S.step = defaultStep();
@@ -159,7 +233,7 @@ function weekView() {
   if (st === 'carted') banner = `<div class="banner ok"><span class="big">✅ In the QFC cart</span>This week's groceries are in the cart.</div>`;
   if (st === 'picking' && S.step > 0 && (S.data.items || []).some(i => i.source === 'recipe')) banner = `<div class="banner info">Picks or portions changed — go back to <b>Pick</b> and tap <b>Confirm portions</b> to refresh the list.</div>`;
   const views = [pickView, pantryView, staplesView, listView];
-  return header('Week of ' + fmtDate(w.week_start), statusLabel(st)) + steps + banner + views[S.step]();
+  return header('Week of ' + fmtDate(w.week_start), statusLabel(st)) + modeToggle() + steps + banner + views[S.step]();
 }
 function statusLabel(st) {
   return { picking: 'Picking meals', pantry: 'Checking pantry & staples', ready_for_cart: 'Sent to cart', carted: 'Carted' }[st] || st;
@@ -201,7 +275,7 @@ function pickView() {
 
 // "(for Bolognese, Piccata)" / "(staple)" / "(added by Sean)" shown after an item's name
 function srcLabel(i, kind) {
-  if (i.source === 'recipe') return i.recipes && i.recipes.length ? `for ${i.recipes.join(', ')}` : '';
+  if (i.source === 'recipe') return i.recipes && i.recipes.length ? `for ${i.recipes.map(t => t.replace(/\s*\([^)]*\)\s*$/, '')).join(', ')}` : '';
   if (i.source === 'custom') return `added by ${i.added_by || '?'}`;
   return kind === 'list' ? 'staple' : '';
 }
@@ -336,6 +410,7 @@ function recipesView() {
 
 /* ---------- events ---------- */
 document.addEventListener('click', async ev => {
+  if (ev.target.closest('a[target=_blank]')) return;
   const el = ev.target.closest('[data-act],[data-tab],[data-step]'); if (!el || el.disabled) return;
   const d = S.data, w = d && d.week, id = +el.dataset.id;
   if (el.dataset.tab) { ev.preventDefault(); S.tab = el.dataset.tab; render.force = true; render(); window.scrollTo(0, 0); return; }
@@ -393,6 +468,11 @@ document.addEventListener('click', async ev => {
       if (ok) { toast(`Added ${r.title} ×${b} to the quick order`); S.tab = 'quick'; render.force = true; render(); window.scrollTo(0, 0); }
       break; }
     case 'startOver': startOver(); break;
+    case 'showRecipe': showRecipe(id); break;
+    case 'mode': S.mode = el.dataset.mode; S.sel = null; render.force = true; render(); window.scrollTo(0, 0); break;
+    case 'selMeal': { const w2 = +el.dataset.week; S.sel = S.sel && S.sel.w === w2 && S.sel.r === id ? null : { w: w2, r: id }; render.force = true; render(); break; }
+    case 'dropDay': if (S.sel && S.sel.w === +el.dataset.week) setPlanDay(S.sel.w, S.sel.r, el.dataset.date); break;
+    case 'dropTray': if (S.sel && S.sel.w === +el.dataset.week) setPlanDay(S.sel.w, S.sel.r, null); break;
   }
 });
 document.addEventListener('change', ev => {
@@ -436,12 +516,27 @@ function showMenu() {
   document.body.appendChild(bg);
 }
 
+/* drag & drop scheduling (desktop) */
+document.addEventListener('dragstart', ev => {
+  const m = ev.target.closest && ev.target.closest('.meal[draggable]'); if (!m) return;
+  S.drag = { w: +m.dataset.week, r: +m.dataset.id }; S.sel = null;
+  ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', m.dataset.id); m.classList.add('dragging');
+});
+const dropZone = ev => { const z = ev.target.closest && ev.target.closest('.drop'); return z && S.drag && +z.dataset.week === S.drag.w ? z : null; };
+document.addEventListener('dragover', ev => { const z = dropZone(ev); if (!z) return; ev.preventDefault(); ev.dataTransfer.dropEffect = 'move';
+  document.querySelectorAll('.drop.over').forEach(x => x !== z && x.classList.remove('over')); z.classList.add('over'); });
+document.addEventListener('dragleave', ev => { const z = dropZone(ev); if (z && !z.contains(ev.relatedTarget)) z.classList.remove('over'); });
+document.addEventListener('drop', ev => { const z = dropZone(ev); if (!z) return; ev.preventDefault();
+  const { w, r } = S.drag; S.drag = null; setPlanDay(w, r, z.dataset.act === 'dropDay' ? z.dataset.date : null); });
+document.addEventListener('dragend', () => { if (S.drag) { S.drag = null; render.force = true; render(); } });
+
 async function startOver() {
   const w = S.data && S.data.week; if (!w) return;
-  if (!window.confirm('Clear all picks, pantry checks and staples for this week?')) return;
+  if (!window.confirm('Clear all picks, pantry checks, staples and meal-plan days for this week?')) return;
   let ok = false;
   await mutate('reset_week', { p_week: w.id }, () => {
-    S.data.options.forEach(o => { o.picked = false; o.servings = 6; }); S.data.items = []; w.status = 'picking'; w.sent_by = null; w.sent_at = null;
+    S.data.options.forEach(o => { o.picked = false; o.servings = 6; o.planned_date = null; }); S.data.items = []; w.status = 'picking'; w.sent_by = null; w.sent_at = null;
+    S.data.plans = plans().filter(p => p.week_id !== w.id); S.mode = null; S.sel = null;
   }, () => { ok = true; });
   if (ok) { S.step = 0; S.open = {}; render.force = true; render(); window.scrollTo(0, 0); toast('↺ Fresh start for this week'); }
 }
