@@ -176,3 +176,17 @@ label.chip{cursor:pointer;display:inline-flex;align-items:center}
 @media (hover:hover) and (pointer:fine){.desk{display:inline}}
 .rsteps li,.ings li{margin:0 0 6px;line-height:1.4}
 .meal .rlink.linkbtn{padding:0;min-height:0;font-size:13px}
+
+/* cart-fill status banner */
+.banner.cart{margin:0 0 14px}
+.banner.warn{background:#fff3d6;border:1px solid #f0c66b;color:#5c3d00}
+.cart-head .big{display:block;font-size:17px;line-height:1.35}
+.cartbar{height:8px;border-radius:99px;background:rgba(0,0,0,.08);overflow:hidden;margin:8px 0 4px}
+.cartbar i{display:block;height:100%;background:var(--green)}
+.banner.warn .cartbar i{background:#d99a1e}
+.cart-meta{font-size:13px;opacity:.8}
+.cart-retry{font-size:15px;margin-top:6px}
+.cart-missing{margin-top:6px;font-size:15px}
+.cart-missing summary{font-weight:700;cursor:pointer}
+.cart-missing ul{margin:6px 0 0;padding-left:20px}
+.cart-missing li{margin:2px 0}

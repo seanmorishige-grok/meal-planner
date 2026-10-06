@@ -95,7 +95,7 @@ function render() {
   render.force = false;
   if (!S.code || !S.who) { app.innerHTML = loginView(); return bindLogin(); }
   if (!S.data) { app.innerHTML = '<div class="boot">🥕</div>'; return; }
-  const body = S.tab === 'recipes' ? recipesView() : S.tab === 'quick' ? quickView() : weekView();
+  const body = S.tab === 'recipes' ? recipesView() : S.tab === 'quick' ? cartBanners('quick') + quickView() : cartBanners('week') + weekView();
   app.innerHTML = `<div class="wrap">${body}
     <div class="sync">${S.error ? esc(S.error) : S.lastSync ? 'Synced ' + S.lastSync.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' }) : ''}</div></div>
     ${S.tab === 'week' && weekMode() === 'shop' ? actionBar() : S.tab === 'quick' ? quickActionBar() : ''}
@@ -149,6 +149,34 @@ function bindLogin() {
 function logout(msg) {
   localStorage.removeItem('mp_code'); S.code = ''; S.data = null; S.loginErr = msg || ''; render.force = true; render();
 }
+
+/* ---------- QFC cart-fill status banner (written by the assistant's cart routines via scripts/set_cart_status.py) ---------- */
+function cartBanners(kind) {
+  const rows = ((S.data && S.data.cart_status) || []).filter(c => c.kind === kind);
+  return rows.map(c => {
+    const fmtT = t => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const prog = c.total ? `${c.added ?? 0} of ${c.total} items are in the cart` : '';
+    const missing = c.missing || [];
+    const label = kind === 'quick' ? `Quick order #${c.week_id}` : `Week of ${fmtDate(c.week_start)}`;
+    let icon = '🛒', cls = 'info', head = c.message;
+    if (c.status === 'blocked_retrying') { icon = '⚠️'; cls = 'warn'; head ||= `QFC's site is having trouble.${prog ? ' ' + prog + ' so far.' : ''}`; }
+    else if (c.status === 'filling') head ||= `Filling the QFC cart…${prog ? ' ' + prog + '.' : ''}`;
+    else if (c.status === 'partial') { icon = '⚠️'; cls = 'warn'; head ||= `Cart is filled except ${missing.length} item${missing.length === 1 ? '' : 's'}. Please add these in the QFC app before checkout.`; }
+    else if (c.status === 'done') { icon = '✅'; cls = 'ok'; head ||= 'All items added to the QFC cart.'; }
+    const retry = c.retry_at && ['blocked_retrying', 'filling', 'partial'].includes(c.status)
+      ? (new Date(c.retry_at) > new Date() ? `Retrying automatically around <b>${fmtT(c.retry_at)}</b>.` : 'Retrying now…') : '';
+    const pct = c.total ? Math.round(100 * Math.min(c.added || 0, c.total) / c.total) : null;
+    return `<div class="banner cart ${cls}" role="status" aria-live="polite">
+      <div class="cart-head"><span class="big">${icon} ${esc(head)}</span></div>
+      ${pct != null ? `<div class="cartbar" aria-label="${pct}% in cart"><i style="width:${pct}%"></i></div><div class="cart-meta">${esc(prog)} · ${label}</div>` : `<div class="cart-meta">${label}</div>`}
+      ${retry ? `<div class="cart-retry">${retry}</div>` : ''}
+      ${missing.length ? `<details class="cart-missing" ${missing.length <= 4 ? 'open' : ''}><summary>${c.status === 'done' ? 'Not added' : 'Still missing'} (${missing.length})</summary><ul>${missing.map(m => `<li>${esc(m)}</li>`).join('')}</ul></details>` : ''}
+      <div class="cart-meta" style="margin-top:4px">Updated ${fmtT(c.updated_at)}</div></div>`;
+  }).join('');
+}
+// keep the banner fresh: re-check when the app comes back to the foreground, plus every 60 s while a fill is in progress
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+setInterval(() => { const live = ((S.data && S.data.cart_status) || []).some(c => ['filling', 'blocked_retrying'].includes(c.status)); if (live) refresh(); else render(); }, 60000);
 
 /* ---------- meal calendar ("This week's plan") ---------- */
 const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
