@@ -540,3 +540,31 @@ b,strong{font-weight:500}
 .sheet .list,.sheet .glist{background:var(--card)}
 .note{background:var(--card)}
 .backlink{font-family:var(--mono);font-size:12.5px;letter-spacing:.06em;text-transform:uppercase}
+
+/* ---------- Today ---------- */
+.today-top{display:flex;justify-content:space-between;align-items:center;margin:8px 0 28px}
+.today-top .wm.sm{margin:0}
+.today-date{font:500 11.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink3)}
+.today-line{display:flex;align-items:baseline;gap:12px;font-size:28px;font-weight:500;letter-spacing:-.035em;line-height:1.15;margin:8px 0 28px}
+.today-line .dot{width:10px;height:10px;flex:none;transform:translateY(-4px)}
+.task{background:var(--card);box-shadow:inset 0 0 0 1px var(--sep);border-radius:var(--r);padding:14px 16px;margin:0 0 20px}
+.task.warn{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--amber) 55%,transparent);background:color-mix(in srgb,var(--amber) 8%,var(--card))}
+.task-k{display:flex;align-items:center;gap:8px;font:500 11px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink2)}
+.task p{margin:6px 0 12px;font-size:16px}
+.task .btn{width:auto;display:inline-flex;padding:0 18px}
+.anchor{background:var(--card);border-radius:var(--r-lg);overflow:hidden;box-shadow:inset 0 0 0 1px var(--sep)}
+.anchor .anchor-art{aspect-ratio:16/10;width:100%;border-radius:0;display:block}
+.anchor .anchor-art img{width:100%;height:100%;object-fit:cover;display:block}
+.anchor-b{padding:16px 16px 18px;display:grid;gap:8px}
+.anchor-k{font:500 11.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--accent-text)}
+.anchor h2{margin:0;font-size:26px;font-weight:500;letter-spacing:-.03em;line-height:1.15}
+.anchor .meta{display:flex;gap:0 10px;flex-wrap:wrap;color:var(--ink2);font:12.5px var(--mono)}
+.anchor .linkbtn{justify-self:start;color:var(--accent-text);font-size:15px}
+.cue{display:flex;align-items:center;gap:8px;font-size:15px;color:var(--ink2)}
+/* slim neutral tab bar */
+.tabbar button{height:46px;color:var(--ink3);gap:3px;font-size:9.5px}
+.tabbar .ic{width:22px;height:22px;stroke-width:1.5}
+.tabbar button.on{color:var(--ink)}
+.tabbar button.on .ic{color:var(--accent-text)}
+.tabbar .dot{position:absolute;top:6px;left:calc(50% + 8px);width:7px;height:7px;box-shadow:0 0 0 2px var(--bar)}
+.tabbar .dot.ok{background:var(--sage)} .tabbar .dot.warn{background:var(--amber)}

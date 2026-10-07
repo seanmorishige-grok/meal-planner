@@ -9,6 +9,7 @@ const CAT_LABEL = { 'produce': 'Produce', 'meat/seafood': 'Meat & seafood', 'dai
 /* line icons (1.75 stroke, currentColor) */
 const svg = (d, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
 const IC = {
+  today: svg('<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/>'),
   week: svg('<rect x="3.5" y="5" width="17" height="15.5" rx="3"/><path d="M3.5 10h17M8 3v4M16 3v4"/>'),
   bag: svg('<path d="M5 8h14l-1.2 11.1a2 2 0 0 1-2 1.9H8.2a2 2 0 0 1-2-1.9L5 8z"/><path d="M9 10V7a3 3 0 0 1 6 0v3"/>'),
   book: svg('<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5v-15z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5"/>'),
@@ -29,7 +30,7 @@ const STEPS = ['Pick', 'Pantry', 'Staples', 'List'];
 const S = {
   code: localStorage.getItem('mp_code') || '',
   who: localStorage.getItem('mp_who') || '',
-  data: null, tab: 'week', sub: null /* week tab: null=home | 'flow' | 'plan'; basket tab: null | 'orders' | 'order' */, orders: null, orderId: null, oq: '', step: null, open: {}, batches: {}, busy: 0, seq: 0, lastSync: null, error: null,
+  data: null, tab: 'today', sub: null /* week tab: null=home | 'flow' | 'plan'; basket tab: null | 'orders' | 'order' */, orders: null, orderId: null, oq: '', step: null, open: {}, batches: {}, busy: 0, seq: 0, lastSync: null, error: null,
   q: '', filter: null /* {k:'tag',id} | {k:'awhile'|'quick'|'new'} */, seg: 'all' /* all | dinner | snack */, sort: localStorage.getItem('mp_sort') || 'cooked' /* cooked | newest | az */, editTime: false,
   noteDraft: {}, tagFilter: [] /* Recipes tab tag filter (AND) */, pickTags: [] /* Pick step tag filter */, detail: null /* {id, r, loading} recipe detail page */,
   mode: null /* 'plan' | 'shop' on This week */, sel: null /* meal picked up for scheduling: {w, r} */, drag: null,
@@ -121,16 +122,17 @@ function render() {
   if (!S.data) { app.innerHTML = '<div class="boot"><span class="spinner" aria-label="Loading"></span></div>'; return; }
   if (S.tab === 'quick') S.tab = 'basket';
   S.banner = S.tab === 'week' && S.sub === 'flow' ? cartBanners('week') : '';   // shown under the large title
-  const body = S.tab === 'recipes' ? recipesView() : S.tab === 'basket' ? (S.sub === 'orders' ? ordersView() : S.sub === 'order' ? orderView() : basketView())
+  const body = S.tab === 'today' ? todayView() : S.tab === 'recipes' ? recipesView() : S.tab === 'basket' ? (S.sub === 'orders' ? ordersView() : S.sub === 'order' ? orderView() : basketView())
     : S.sub === 'flow' ? weekView() : S.sub === 'plan' && plans().length ? planView() : homeView();
   heartbeatSoon();
   app.innerHTML = `<div class="wrap">${body}
     <div class="sync">${S.error ? esc(S.error) : S.lastSync ? 'Synced ' + S.lastSync.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' }) : ''}</div></div>
     ${S.tab === 'week' && S.sub === 'flow' ? actionBar() : S.tab === 'basket' && !S.sub ? basketActionBar() : ''}
-    <nav class="tabbar">
-      <button data-tab="week" class="${S.tab === 'week' ? 'on' : ''}">${IC.week}<span>Home</span></button>
-      <button data-tab="basket" class="${S.tab === 'basket' ? 'on' : ''}">${IC.bag}<span>Basket</span>${basketCounts().unc ? '<i class="dot" aria-label="items not in the cart yet"></i>' : ''}</button>
+    <nav class="tabbar" aria-label="Sections">
+      <button data-tab="today" class="${S.tab === 'today' ? 'on' : ''}">${IC.today}<span>Today</span></button>
+      <button data-tab="week" class="${S.tab === 'week' ? 'on' : ''}">${IC.week}<span>Week</span></button>
       <button data-tab="recipes" class="${S.tab === 'recipes' ? 'on' : ''}">${IC.book}<span>Recipes</span></button>
+      <button data-tab="basket" class="${S.tab === 'basket' ? 'on' : ''}">${IC.bag}<span>Basket</span>${tabDot()}</button>
     </nav>`;
 }
 
@@ -680,7 +682,7 @@ document.addEventListener('click', async ev => {
     case 'weOrdered': weOrdered(); break;
     case 'activity': activitySheet(); break;
     case 'orders': openOrders(); break;
-    case 'openOrder': S.sub = 'order'; S.orderId = id; render.force = true; render(); window.scrollTo(0, 0); break;
+    case 'openOrder': S.tab = 'basket'; S.sub = 'order'; S.orderId = id; render.force = true; render(); window.scrollTo(0, 0); if (!S.orders) { S.orders = await rpc('get_orders').catch(() => []); render.force = true; render(); } break;
     case 'backOrders': S.sub = 'orders'; render.force = true; render(); break;
     case 'backBasket': S.sub = null; render.force = true; render(); window.scrollTo(0, 0); break;
     case 'reorder': reorder(id, el); break;
@@ -1178,7 +1180,7 @@ async function checkVersion() {
 const usd = n => '$' + Math.round(n);
 function ago(ts) { const m = Math.round((Date.now() - new Date(ts)) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} hr ago` : fmtWhen(ts); }
 function fmtShort(ts) { return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); }
-function backHome() { return `<button class="backlink" data-act="home">${IC.back}Home</button>`; }
+function backHome() { return `<button class="backlink" data-act="home">${IC.back}Week</button>`; }
 function basket() { return (S.data && S.data.basket) || { items: [], weeks: [] }; }
 function basketCounts() {
   const b = basket(), buy = (b.items || []).filter(i => i.include && !i.have_it);
@@ -1277,15 +1279,13 @@ function homeView() {
   const steps = timeline(), cur = steps.findIndex(s => !s.done), done = steps.filter(s => s.done), w = S.data.week;
   const act = (S.data.activity || []).slice(0, 4);
   const curStep = steps[cur];
-  return '<div class="wm sm" aria-label="sous">sous<i></i></div>' + header('This week', w ? 'Week of ' + fmtDate(w.week_start) : '') + presenceNote() + rhythmNote(steps) + statusCard()
+  return header('Week', w ? 'Week of ' + fmtDate(w.week_start) : '') + presenceNote() + rhythmNote(steps)
     + (curStep ? `<section class="now" aria-label="Current step"><div class="now-k">Step ${cur + 1} of 4 · ${curStep.day}</div><h2>${curStep.title}</h2><p>${curStep.body}</p><div class="now-actions">${curStep.action}</div></section>`
       : `<section class="now done"><div class="now-k">All set</div><h2>Ordered</h2><p>This week’s groceries are on the way. Anything you add now goes to next week’s basket.</p><div class="now-actions"><button class="btn ghost" data-act="basketTab">Start next week’s basket</button></div></section>`)
     + `<ol class="steps-list">${steps.map((s, i) => i === cur ? '' : `<li class="${s.done ? 'done' : 'todo'}">${s.done ? IC.check : `<span class="n">${i + 1}</span>`}<span class="t">${s.title}</span><span class="d">${s.done ? s.doneText : s.day}</span></li>`).join('')}</ol>`
     + `<div class="list menu-list home-links">${plans().length ? `<button class="mrow" data-act="planView">${IC.week}<span><b>Meal plan</b><small>Which night for which meal</small></span>${IC.chev}</button>` : ''}
         ${w ? `<button class="mrow" data-act="flow" data-step="${defaultStep()}">${IC.book}<span><b>Picks and list</b><small>Week of ${fmtDate(w.week_start)}</small></span>${IC.chev}</button>` : ''}
-        <button class="mrow" data-act="orders">${IC.bag}<span><b>Orders</b><small>Past orders, search, reorder</small></span>${IC.chev}</button></div>`
-    + `<div class="h2row subhead-row"><h3 class="subhead">Activity</h3><button class="hdrbtn" data-act="activity">See all</button></div>
-       <div class="list">${act.length ? act.map(activityRow).join('') : '<div class="row"><div class="name"><span class="src">Nothing yet. Changes from both of you and the assistant show up here.</span></div></div>'}</div>`;
+        <button class="mrow" data-act="basketTab">${IC.bag}<span><b>Basket and orders</b><small>Cart status, activity, past orders</small></span>${IC.chev}</button></div>`;
 }
 
 /* basket tab */
@@ -1299,7 +1299,9 @@ function basketView() {
     const r = `<div class="row ${i.carted_at ? 'carted' : ''}"><div class="name"><b>${esc(i.name)}</b><span class="src">${[i.qty && esc(i.qty), who].filter(Boolean).join(' · ')}</span></div>
       ${i.carted_at ? '<span class="incart">In cart</span>' : `<button class="toggle add on" data-act="inc" data-id="${i.id}" aria-pressed="true">Buy</button>`}</div>`;
     return !i.carted_at && i.source === 'custom' ? swipeWrap(r, { act: 'delItem', id: i.id, label: 'Delete' }) : !i.carted_at ? swipeWrap(r, { act: 'skipItem', id: i.id, label: 'Remove' }) : r; };
-  return header('Basket', sub, `<button class="hdrbtn" data-act="orders">Orders</button>`) + presenceNote()
+  return header('Basket', sub, `<button class="hdrbtn" data-act="orders">Orders</button>`) + presenceNote() + statusCard()
+    + `<div class="list menu-list"><button class="mrow" data-act="activity"><span><b>Activity</b><small>${(S.data.activity || [])[0] ? esc(S.data.activity[0].who) + ' ' + activityText(S.data.activity[0]) + ' · ' + ago(S.data.activity[0].at) : 'Changes from both of you and the assistant'}</small></span>${IC.chev}</button>
+       <button class="mrow" data-act="orders"><span><b>Orders</b><small>Past orders, search, reorder</small></span>${IC.chev}</button></div>`
     + `<p class="hint">One basket for the next delivery. Meals, staples and extras all land here, and either of you can add anytime.</p>`
     + addItemForm('addFormBasket', 'Add to the basket')
     + (order.length ? order.map(g => `<div class="group">${esc(g)} · ${groups[g].length}</div><div class="list">${groups[g].map(row).join('')}</div>`).join('')
@@ -1441,3 +1443,60 @@ async function orderStatus(id, status) {
   S.orders = await rpc('get_orders').catch(() => S.orders); render.force = true; render();
 }
 document.addEventListener('input', ev => { if (ev.target.id === 'osearch') { S.oq = ev.target.value; const pos = ev.target.selectionStart; render.force = true; render(); const i = $('#osearch'); if (i) { i.focus(); i.setSelectionRange(pos, pos); } } });
+
+/* ======================= Today ======================= */
+function ptNow() { const d = new Date(new Date(S.data.server_time || Date.now()).toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })); return { h: d.getHours() + d.getMinutes() / 60, dow: d.getDay() }; }
+function plannedMeals() { return plans().flatMap(p => p.meals.filter(m => m.planned_date).map(m => ({ ...m, week_id: p.week_id }))).sort((a, b) => a.planned_date.localeCompare(b.planned_date)); }
+function lastOrderOut() { const o = S.data.last_order; return o && o.status === 'ordered' ? o : null; }
+function tabDot() {
+  const issue = cartIssue(), c = basketCounts();
+  if (issue && issue.status !== 'filling') return '<i class="dot warn" aria-label="the cart needs a look"></i>';
+  if (c.b.status === 'ready_for_cart' || lastOrderOut()) return '<i class="dot ok" aria-label="handled"></i>';
+  return '';
+}
+function todayTask() {
+  const issue = cartIssue(), { h, dow } = ptNow(), out = lastOrderOut();
+  if (issue && issue.status !== 'filling')
+    return `<section class="task warn"><div class="task-k"><i class="dot warn"></i>Needs a look</div><p>${esc(issue.message || 'QFC needs attention.')}</p><button class="btn ghost small" data-act="basketTab">Open basket</button></section>`;
+  const w = S.data.week, nextUnpicked = w && w.week_start > todayISO() && w.status === 'picking';
+  if (dow === 4 && h >= 16 && nextUnpicked)
+    return `<section class="task"><div class="task-k"><i class="dot"></i>Tonight</div><p>Pick next week’s dinners.${picked().length ? ` ${picked().length} picked so far.` : ''}</p><button class="btn small" data-act="todayPick">Pick dinners</button></section>`;
+  if (out) return `<section class="task"><div class="task-k"><i class="dot ok"></i>Order out</div><p>Groceries are on the way. Ordered ${fmtWhen(out.ordered_at)}${out.ordered_by ? ' by ' + esc(out.ordered_by) : ''}.</p><button class="btn ghost small" data-act="openOrder" data-id="${out.id}" data-from="today">Order details</button></section>`;
+  return '';
+}
+function todayView() {
+  const t = todayISO(), { h } = ptNow(), meals = plannedMeals();
+  const tonight = meals.filter(m => m.planned_date === t), next = meals.find(m => m.planned_date > t);
+  const issue = cartIssue(), handled = !(issue && issue.status !== 'filling') && !!lastOrderOut() || (S.data.plans || []).some(p => p.status === 'carted');
+  let line, tone;
+  if (tonight.length) { line = handled ? 'Dinner’s handled.' : 'Dinner’s planned.'; tone = handled ? 'ok' : ''; }
+  else if (next) { line = 'Nothing planned tonight.'; tone = ''; }
+  else { line = 'A quiet week so far.'; tone = ''; }
+  const date = new Date(t + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC' });
+  const anchor = (m, isToday) => {
+    const r = (S.data.recipes || []).find(x => x.id === m.recipe_id) || {};
+    const mins = r.total_minutes || minutesOf(m.total_time || r.total_time || '');
+    let cue = '';
+    if (isToday && m.long_cook && h < 12) cue = `<div class="cue"><i class="dot warn"></i>Long cook today. Start prep ${mins ? `by ${fmtClock(18 - mins / 60)}` : 'early afternoon'}.</div>`;
+    else if (isToday && h >= 15 && h < 21) cue = `<button class="btn" data-act="startCooking" data-id="${m.recipe_id}">Start cooking</button>`;
+    return `<article class="anchor">${coverHtml({ ...r, title: m.title }, 'anchor-art', true)}
+      <div class="anchor-b"><div class="anchor-k">${isToday ? 'Tonight' : dayName(m.planned_date) + ' · ' + fmtDate(m.planned_date)}</div>
+      <h2>${esc(m.title)}</h2><div class="meta">${metaLine([m.total_time && esc(m.total_time), 'Serves ' + m.servings, m.long_cook && '<em class="long">Long cook</em>'])}</div>
+      ${cue}<button class="linkbtn" data-act="openRecipe" data-id="${m.recipe_id}">View recipe</button></div></article>`;
+  };
+  const body = tonight.length ? tonight.map(m => anchor(m, true)).join('')
+    : next ? `<p class="hint">Next up</p>${anchor(next, false)}`
+    : (() => { const un = plans().flatMap(p => p.meals.filter(m => !m.planned_date));
+        return un.length ? `<div class="empty"><p><b>Nothing on the calendar yet</b>${un.length === 1 ? esc(un[0].title) + ' is picked' : un.length + ' dinners are picked'} but not on a night. Give ${un.length === 1 ? 'it' : 'them'} a day and ${un.length === 1 ? 'it shows' : 'they show'} up here.</p><button class="btn ghost" data-act="todayPlan">Open the plan</button></div>`
+          : `<div class="empty"><p><b>No dinners on the calendar</b>Pick a few for the week and they’ll show up here.</p><button class="btn ghost" data-tab="week">Go to Week</button></div>`; })();
+  return `<div class="today-top"><div class="wm sm" aria-label="sous">sous<i></i></div>${whoBtn()}</div>
+    <div class="today-date">${date}</div>
+    <div class="today-line"><i class="dot ${tone}"></i><span>${line}</span></div>${presenceNote()}${todayTask()}${body}`;
+}
+function fmtClock(hh) { hh = Math.max(8, hh); const H = Math.floor(hh), M = Math.round((hh - H) * 4) * 15; const d = new Date(2000, 0, 1, H + Math.floor(M / 60), M % 60); return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }); }
+document.addEventListener('click', ev => {
+  const el = ev.target.closest('[data-act="startCooking"],[data-act="todayPick"],[data-act="todayPlan"]'); if (!el) return;
+  if (el.dataset.act === 'startCooking') showRecipe(+el.dataset.id);
+  else if (el.dataset.act === 'todayPlan') { S.tab = 'week'; S.sub = 'plan'; render.force = true; render(); window.scrollTo(0, 0); }
+  else { S.tab = 'week'; S.sub = 'flow'; S.step = 0; render.force = true; render(); window.scrollTo(0, 0); }
+});
