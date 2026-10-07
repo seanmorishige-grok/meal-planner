@@ -12,7 +12,7 @@ const S = {
   code: localStorage.getItem('mp_code') || '',
   who: localStorage.getItem('mp_who') || '',
   data: null, tab: 'week', step: null, open: {}, batches: {}, busy: 0, seq: 0, lastSync: null, error: null,
-  q: '', seg: 'all' /* all | dinner | snack */, sort: localStorage.getItem('mp_sort') || 'cooked' /* cooked | newest | az */, editTime: false,
+  q: '', filter: null /* {k:'tag',id} | {k:'awhile'|'quick'|'new'} */, seg: 'all' /* all | dinner | snack */, sort: localStorage.getItem('mp_sort') || 'cooked' /* cooked | newest | az */, editTime: false,
   noteDraft: {}, tagFilter: [] /* Recipes tab tag filter (AND) */, pickTags: [] /* Pick step tag filter */, detail: null /* {id, r, loading} recipe detail page */,
   mode: null /* 'plan' | 'shop' on This week */, sel: null /* meal picked up for scheduling: {w, r} */, drag: null,
 };
@@ -472,7 +472,7 @@ function snackCard(r) {
   return `<div class="rcard"><button class="rcard-open" data-act="openRecipe" data-id="${r.id}" aria-label="Open ${esc(r.title)}">
     <div class="rc-top"><div class="card-title">${esc(r.title)}</div><span class="chev">›</span></div>
     <div class="meta">${timeMeta(r.total_time, r.total_minutes)}<span>Makes ${r.servings || '?'} per batch</span><span>${lastCooked(r.last_cooked)}</span>${r.note_count ? `<span>📝 ${r.note_count}</span>` : ''}</div>
-    <div class="pills"><span class="pill kind">Snack & baking</span>${r.status === 'trial' ? '<span class="pill trial">New</span>' : ''}${sortedTags(r.tags).map(t => `<span class="pill">${esc(t.name)}</span>`).join('')}</div></button>
+    <div class="pills"><span class="pill kind">Snack & baking</span>${r.status === 'trial' ? '<span class="pill trial">New</span>' : ''}${sortedTags(r.tags).map(pillBtn).join('')}</div></button>
     <div class="snackrow"><div class="stepper sm" aria-label="Batches"><button data-act="batch" data-id="${r.id}" data-d="-1" aria-label="fewer batches">−</button><span>${b}×</span><button data-act="batch" data-id="${r.id}" data-d="1" aria-label="more batches">+</button></div>
       <button class="btn small compact" data-act="snackAdd" data-id="${r.id}" ${(r.ingredients || []).length ? '' : 'disabled'}>🛒 Add ingredients to order</button></div></div>`;
 }
@@ -480,7 +480,7 @@ function recipeCard(r) {
   return `<div class="rcard"><button class="rcard-open" data-act="openRecipe" data-id="${r.id}" aria-label="Open ${esc(r.title)}">
     <div class="rc-top"><div class="card-title">${esc(r.title)}</div><span class="chev">›</span></div>
     <div class="meta">${timeMeta(r.total_time, r.total_minutes)}<span>Serves ${r.servings || '?'}</span><span>${lastCooked(r.last_cooked)}</span>${r.note_count ? `<span>📝 ${r.note_count}</span>` : ''}</div>
-    ${r.status === 'trial' || (r.tags || []).length ? `<div class="pills">${r.status === 'trial' ? '<span class="pill trial">New</span>' : ''}${sortedTags(r.tags).map(t => `<span class="pill">${esc(t.name)}</span>`).join('')}</div>` : ''}</button></div>`;
+    ${r.status === 'trial' || (r.tags || []).length ? `<div class="pills">${r.status === 'trial' ? '<span class="pill trial">New</span>' : ''}${sortedTags(r.tags).map(pillBtn).join('')}</div>` : ''}</button></div>`;
 }
 function pendingCard(r) {
   return r.photo_count ? `<div class="rcard pending"><div class="pills"><span class="pill trial">📷 Processing…</span></div>
@@ -490,15 +490,62 @@ function pendingCard(r) {
       <div class="card-title" style="margin-top:6px;word-break:break-all;font-size:15px">${esc(r.url)}</div>
       <div class="meta">Added by ${esc(r.added_by || '?')} — ingredients get filled in by the assistant.${r.notes ? ' ' + esc(r.notes) : ''}</div></div>`;
 }
+function pillBtn(t) { return `<span class="pill tap" role="button" tabindex="0" data-act="tagFilter" data-id="${t.id}" aria-label="Show recipes tagged ${esc(t.name)}">${esc(t.name)}</span>`; }
+/* smart shelves + filters (a filter is a tag or a shelf; it combines with search and the segment) */
+const SHELVES = [
+  { k: 'awhile', title: "Haven't had in a while", sub: 'Last cooked 4+ weeks ago', test: r => inAWhile(r.last_cooked), sort: (a, b) => a.last_cooked.localeCompare(b.last_cooked) },
+  { k: 'new', title: 'New to try', sub: 'Added recently, not a favorite yet', test: r => r.status === 'trial', sort: (a, b) => (b.created_at || '').localeCompare(a.created_at || '') },
+  { k: 'quick', title: 'Under 30 min', sub: 'By total time', test: r => (r.total_minutes ?? minutesOf(r.total_time) ?? 999) <= 30, sort: (a, b) => (a.total_minutes || 0) - (b.total_minutes || 0) },
+];
+function filterDef(f) {
+  if (!f) return null;
+  if (f.k === 'tag') { const n = tagName(f.id); return n ? { label: n, test: r => (r.tags || []).includes(f.id) } : null; }
+  const sh = SHELVES.find(x => x.k === f.k); return sh && { label: sh.title, test: sh.test };
+}
+function inSeg(r) { return S.seg === 'all' || (S.seg === 'snack' ? r.recipe_type === 'snack/baking' : r.recipe_type !== 'snack/baking'); }
+function libRecipes() { return (S.data.recipes || []).filter(r => r.status !== 'retired' && r.status !== 'pending' && inSeg(r)); }
+function shelvesHtml() {
+  const lib = libRecipes(), rows = [];
+  const tagShelves = (S.data.tags || []).filter(t => lib.some(r => (r.tags || []).includes(t.id))).sort((a, b) => a.name.localeCompare(b.name))
+    .map(t => ({ f: { k: 'tag', id: t.id }, title: t.name, sub: 'Tag', items: sortRecipes(lib.filter(r => (r.tags || []).includes(t.id))) }));
+  const smart = SHELVES.map(sh => ({ f: { k: sh.k }, title: sh.title, sub: sh.sub, items: lib.filter(sh.test).sort(sh.sort) }));
+  // order: what to cook next (in a while), tags people chose, new to try, quick
+  for (const x of [smart[0], ...tagShelves, smart[1], smart[2]]) if (x.items.length) rows.push(x);
+  if (!rows.length) return '';
+  return rows.map(x => `<section class="shelf" aria-label="${esc(x.title)}">
+      <div class="shelf-head"><h3>${esc(x.title)} <small>${x.items.length}</small></h3>
+        <button class="seeall" data-act="seeAll" data-f='${esc(JSON.stringify(x.f))}'>See all</button></div>
+      <div class="shelf-row">${x.items.slice(0, 12).map(r => `<button class="scard" data-act="openRecipe" data-id="${r.id}">
+          <span class="scard-art" style="--h:${(r.id * 47) % 360}">${esc(recipeEmoji(r))}</span>
+          <span class="scard-title">${esc(r.title)}</span>
+          <span class="scard-meta">${esc(r.total_time || '—')}${(r.total_minutes ?? minutesOf(r.total_time)) >= 90 ? ' · ⏳' : ''}</span></button>`).join('')}</div></section>`).join('')
+    + `<div class="list-head">All recipes</div>`;
+}
+function recipeEmoji(r) {
+  const title = r.title.toLowerCase(), t = title + ' ' + (r.ing_text || '').toLowerCase();
+  if (r.recipe_type === 'snack/baking') return /muffin|cake|cookie|bread/.test(t) ? '🧁' : '🥨';
+  const RULES = [[/salad/, '🥗'], [/soup|stew|chili/, '🍲'], [/taco|carnitas/, '🌮'], [/salmon|sushi|fish|shrimp/, '🍣'], [/noodle|pasta|bolognese|tortellini|gnocchi|orzo|spaghetti/, '🍝'],
+    [/steak|beef|roast|stroganoff/, '🥩'], [/pork|chop/, '🍖'], [/chicken/, '🍗'], [/lettuce wrap|wrap/, '🥬'], [/rice|bowl/, '🍚']];
+  for (const [re, e] of RULES) if (re.test(title)) return e;   // the title decides first, ingredients only as a fallback
+  for (const [re, e] of [[/salad/, '🥗'], [/soup|stew|chili/, '🍲'], [/taco|carnitas/, '🌮'], [/salmon|sushi|fish|shrimp/, '🍣'], [/noodle|pasta|bolognese|tortellini|gnocchi|orzo|spaghetti/, '🍝'],
+    [/steak|beef|roast|stroganoff/, '🥩'], [/pork|chop/, '🍖'], [/chicken/, '🍗'], [/lettuce wrap|wrap/, '🥬'], [/rice|bowl/, '🍚']]) if (re.test(t)) return e;
+  return '🍽️';
+}
+function tokenHtml() {
+  const f = filterDef(S.filter);
+  return f ? `<div class="tokens"><span class="token">${S.filter.k === 'tag' ? '🏷️' : ''}${esc(f.label)}<button data-act="clearFilter" aria-label="Remove filter ${esc(f.label)}">✕</button></span></div>` : '';
+}
 function recipeListHtml() {
   const all = (S.data.recipes || []).filter(r => r.status !== 'retired');
-  const inSeg = r => S.seg === 'all' || (S.seg === 'snack' ? r.recipe_type === 'snack/baking' : r.recipe_type !== 'snack/baking');
-  const pending = S.q ? [] : all.filter(r => r.status === 'pending' && inSeg(r));
-  const lib = sortRecipes(all.filter(r => r.status !== 'pending' && inSeg(r) && recipeMatches(r, S.q)));
+  const f = filterDef(S.filter); if (S.filter && !f) S.filter = null;
+  const pending = S.q || f ? [] : all.filter(r => r.status === 'pending' && inSeg(r));
+  const lib = sortRecipes(all.filter(r => r.status !== 'pending' && inSeg(r) && recipeMatches(r, S.q) && (!f || f.test(r))));
+  const shelves = !S.q && !f ? shelvesHtml() : '';
   const cards = lib.map(r => swipeWrap(r.recipe_type === 'snack/baking' ? snackCard(r) : recipeCard(r), { act: 'delRecipeSwipe', id: r.id, label: 'Delete', full: false, cls: 'sw-card' })).join('');
-  const count = `<div class="rcount">${lib.length} recipe${lib.length === 1 ? '' : 's'}${S.q ? ` matching “${esc(S.q)}”` : ''} · ${SORTS[S.sort]}</div>`;
-  const empty = !lib.length ? `<div class="empty"><div class="e">🔍</div><p>${S.q ? `No recipes match “${esc(S.q)}”.` : 'Nothing here yet.'}</p></div>` : '';
-  return pending.map(pendingCard).join('') + (lib.length ? count : '') + cards + empty;
+  const what = [S.q && `matching “${esc(S.q)}”`, f && `in ${esc(f.label)}`].filter(Boolean).join(' ');
+  const count = `<div class="rcount">${lib.length} recipe${lib.length === 1 ? '' : 's'}${what ? ' ' + what : ''} · ${SORTS[S.sort]}</div>`;
+  const empty = !lib.length ? `<div class="empty"><div class="e">🔍</div><p>${S.q || f ? `No recipes ${what}.` : 'Nothing here yet.'}</p>${f ? '<button class="linkbtn" data-act="clearFilter">Remove filter</button>' : ''}</div>` : '';
+  return shelves + pending.map(pendingCard).join('') + (lib.length ? count : '') + cards + empty;
 }
 function recipesView() {
   if (S.detail) return recipeDetailView();
@@ -510,10 +557,12 @@ function recipesView() {
         <input id="rsearch" type="search" inputmode="search" enterkeyhint="search" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Search recipes, ingredients, tags" value="${esc(S.q)}" aria-label="Search recipes">
         <button class="sclear ${S.q ? 'on' : ''}" data-act="qclear" aria-label="Clear search" type="button">✕</button></label>
       <button class="iconbtn sortbtn" data-act="sortMenu" aria-label="Sort: ${SORTS[S.sort]}"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 4v12M6 16l-3-3M6 16l3-3M14 16V4M14 4l-3 3M14 4l3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+    <div id="rtoken">${tokenHtml()}</div>
     <div class="seg3" role="tablist">${seg.map(([k, l]) => `<button role="tab" aria-selected="${S.seg === k}" class="${S.seg === k ? 'on' : ''}" data-act="seg" data-seg="${k}">${l}</button>`).join('')}</div>
     <div id="rlist">${recipeListHtml()}</div>`;
 }
-function updateRecipeList() { const el = $('#rlist'); if (el) el.innerHTML = recipeListHtml(); const c = $('.sclear'); if (c) c.classList.toggle('on', !!S.q); }
+function updateRecipeList() { const el = $('#rlist'); if (el) el.innerHTML = recipeListHtml(); const tk = $('#rtoken'); if (tk) tk.innerHTML = tokenHtml(); const c = $('.sclear'); if (c) c.classList.toggle('on', !!S.q); }
+function listTop() { const sr = $('.searchrow'); if (sr && window.scrollY > sr.offsetTop) window.scrollTo({ top: Math.max(0, sr.offsetTop - 8), behavior: reduced() ? 'auto' : 'smooth' }); }
 function sortMenu() {
   const bg = document.createElement('div'); bg.className = 'sheet-bg';
   bg.innerHTML = `<div class="sheet actions" role="dialog" aria-label="Sort recipes"><div class="sheet-title">Sort by</div>
@@ -626,6 +675,9 @@ document.addEventListener('click', async ev => {
     case 'fclear': S[el.dataset.key] = []; render.force = true; render(); break;
     case 'openRecipe': openRecipe(id); break;
     case 'seg': S.seg = el.dataset.seg; render.force = true; render(); break;
+    case 'tagFilter': ev.preventDefault(); ev.stopPropagation(); S.filter = { k: 'tag', id }; updateRecipeList(); listTop(); break;
+    case 'seeAll': S.filter = JSON.parse(el.dataset.f); updateRecipeList(); listTop(); break;
+    case 'clearFilter': S.filter = null; updateRecipeList(); break;
     case 'qclear': S.q = ''; updateRecipeList(); { const i = $('#rsearch'); if (i) { i.value = ''; i.focus(); } } break;
     case 'sortMenu': sortMenu(); break;
     case 'editTime': S.detail.editTime = true; S.detail.timeDraft = null; render.force = true; render(); setTimeout(() => { const i = $('#timeForm input'); if (i) { i.focus(); i.select(); } }, 30); break;
