@@ -1,4 +1,4 @@
-/* Shige Meal Planning — shared weekly meal planner. Vanilla JS, talks to Supabase RPCs only. */
+/* Sous — shared weekly meal planner. Vanilla JS, talks to Supabase RPCs only. */
 const SUPABASE_URL = 'https://lpppmjnryqtwhdsnhzpx.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxwcHBtam5yeXF0d2hkc25oenB4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEyMjczMjksImV4cCI6MjEwNjgwMzMyOX0.BYQpNOpwE98_4J7ICCgDYcIzlIzwm13je9dgpWnx5KU'; // public anon key: it can only call passcode-checked RPCs
 const POLL_MS = 5000;
@@ -29,7 +29,7 @@ const STEPS = ['Pick', 'Pantry', 'Staples', 'List'];
 const S = {
   code: localStorage.getItem('mp_code') || '',
   who: localStorage.getItem('mp_who') || '',
-  data: null, tab: 'week', step: null, open: {}, batches: {}, busy: 0, seq: 0, lastSync: null, error: null,
+  data: null, tab: 'week', sub: null /* week tab: null=home | 'flow' | 'plan'; basket tab: null | 'orders' | 'order' */, orders: null, orderId: null, oq: '', step: null, open: {}, batches: {}, busy: 0, seq: 0, lastSync: null, error: null,
   q: '', filter: null /* {k:'tag',id} | {k:'awhile'|'quick'|'new'} */, seg: 'all' /* all | dinner | snack */, sort: localStorage.getItem('mp_sort') || 'cooked' /* cooked | newest | az */, editTime: false,
   noteDraft: {}, tagFilter: [] /* Recipes tab tag filter (AND) */, pickTags: [] /* Pick step tag filter */, detail: null /* {id, r, loading} recipe detail page */,
   mode: null /* 'plan' | 'shop' on This week */, sel: null /* meal picked up for scheduling: {w, r} */, drag: null,
@@ -41,7 +41,7 @@ const SW = { el: null, open: null, x0: 0, y0: 0, base: 0, tx: 0, axis: null, sup
 async function rpc(fn, args = {}) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
     method: 'POST', keepalive: true,
-    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json' },
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json', 'x-who': whoHeader() },
     body: JSON.stringify({ p_code: S.code, ...args }),
   });
   const txt = await res.text();
@@ -53,11 +53,12 @@ async function rpc(fn, args = {}) {
   }
   return body;
 }
+function whoHeader() { const w = (S.who || '').slice(0, 40); return /^[\x20-\x7e]*$/.test(w) ? w : encodeURIComponent(w); }
 // mutation: optimistic local change, then server call, then refresh
 async function mutate(fn, args, optimistic, onOk) {
   S.busy++; S.seq++;
   if (optimistic) { optimistic(); render(); }
-  try { await rpc(fn, args); if (onOk) onOk(); }
+  try { const res = await rpc(fn, args); if (onOk) onOk(res); }
   catch (e) { handleErr(e); }
   finally { S.busy--; }
   await refresh(true);
@@ -118,14 +119,17 @@ function render() {
   render.force = false;
   if (!S.code || !S.who) { app.innerHTML = loginView(); return bindLogin(); }
   if (!S.data) { app.innerHTML = '<div class="boot"><span class="spinner" aria-label="Loading"></span></div>'; return; }
-  S.banner = S.tab === 'recipes' ? '' : cartBanners(S.tab === 'quick' ? 'quick' : 'week');   // shown under the large title
-  const body = S.tab === 'recipes' ? recipesView() : S.tab === 'quick' ? quickView() : weekView();
+  if (S.tab === 'quick') S.tab = 'basket';
+  S.banner = S.tab === 'week' && S.sub === 'flow' ? cartBanners('week') : '';   // shown under the large title
+  const body = S.tab === 'recipes' ? recipesView() : S.tab === 'basket' ? (S.sub === 'orders' ? ordersView() : S.sub === 'order' ? orderView() : basketView())
+    : S.sub === 'flow' ? weekView() : S.sub === 'plan' && plans().length ? planView() : homeView();
+  heartbeatSoon();
   app.innerHTML = `<div class="wrap">${body}
     <div class="sync">${S.error ? esc(S.error) : S.lastSync ? 'Synced ' + S.lastSync.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' }) : ''}</div></div>
-    ${S.tab === 'week' && weekMode() === 'shop' ? actionBar() : S.tab === 'quick' ? quickActionBar() : ''}
+    ${S.tab === 'week' && S.sub === 'flow' ? actionBar() : S.tab === 'basket' && !S.sub ? basketActionBar() : ''}
     <nav class="tabbar">
-      <button data-tab="week" class="${S.tab === 'week' ? 'on' : ''}">${IC.week}<span>This week</span></button>
-      <button data-tab="quick" class="${S.tab === 'quick' ? 'on' : ''}">${IC.bag}<span>Quick order</span>${S.data.quick && S.data.quick.status === 'picking' ? '<i class="dot" aria-label="in progress"></i>' : ''}</button>
+      <button data-tab="week" class="${S.tab === 'week' ? 'on' : ''}">${IC.week}<span>Home</span></button>
+      <button data-tab="basket" class="${S.tab === 'basket' ? 'on' : ''}">${IC.bag}<span>Basket</span>${basketCounts().unc ? '<i class="dot" aria-label="items not in the cart yet"></i>' : ''}</button>
       <button data-tab="recipes" class="${S.tab === 'recipes' ? 'on' : ''}">${IC.book}<span>Recipes</span></button>
     </nav>`;
 }
@@ -140,7 +144,7 @@ function header(title, sub, actions = '') {
 function loginView() {
   const names = ['Sean'];
   return `<div class="login">
-    <h1>Shige Meal Planning</h1><p>Plan the week together.</p>
+    <h1 class="brand">sous</h1><p>for the Morishiges</p>
     <form id="loginForm" autocomplete="off">
       <label for="code">Household passcode</label>
       <input id="code" class="field" type="text" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="word-word-00" value="${esc(S.code)}" required>
@@ -217,14 +221,9 @@ function planLabel(p) {
   return 'Week of ' + fmtDate(p.week_start);
 }
 // Plan view is the default once the shown week is sent/carted, or while a sent plan covers today; picking stays one tap away.
-function weekMode() {
-  if (!plans().length) return 'shop';
-  if (S.mode) return S.mode;
-  const t = todayISO();
-  return locked() || plans().some(p => p.week_start <= t && t <= addDays(p.week_start, 6)) ? 'plan' : 'shop';
-}
+function weekMode() { return S.sub === 'plan' && plans().length ? 'plan' : 'shop'; }
 function modeToggle() {
-  if (!plans().length) return '';
+  return '';
   const m = weekMode();
   return `<div class="seg"><button class="${m === 'plan' ? 'on' : ''}" data-act="mode" data-mode="plan">Plan</button><button class="${m === 'shop' ? 'on' : ''}" data-act="mode" data-mode="shop">Shopping</button></div>`;
 }
@@ -255,7 +254,7 @@ function planSection(p) {
 }
 function planView() {
   const ps = plans();
-  return header('Meal plan', ps.length > 1 ? 'This week and next' : '') + modeToggle() + ps.map(planSection).join('');
+  return backHome() + header('Meal plan', ps.length > 1 ? 'This week and next' : '') + presenceNote() + ps.map(planSection).join('');
 }
 // recipe sheet for recipes without a web link (typed-up photo recipes)
 async function showRecipe(id) {
@@ -281,7 +280,7 @@ async function setPlanDay(w, r, date) {
 function weekView() {
   if (weekMode() === 'plan') return planView();
   const w = S.data.week;
-  if (!w) return header('This week') + `<div class="empty"><p><b>No week planned yet</b>Options show up here when they’re posted.</p></div>`;
+  if (!w) return backHome() + header('This week') + `<div class="empty"><p><b>No week planned yet</b>Options show up here when they’re posted.</p></div>`;
   if (S.step == null) S.step = defaultStep();
   const st = w.status, ds = defaultStep();
   const steps = `<div class="steps" role="tablist">${STEPS.map((n, i) => `<button role="tab" aria-selected="${S.step === i}" class="step ${S.step === i ? 'on' : ''} ${i < ds ? 'done' : ''}" data-step="${i}">${i < ds ? IC.check : ''}${n}</button>`).join('')}</div>`;
@@ -289,7 +288,7 @@ function weekView() {
   if (st === 'ready_for_cart') banner = `<div class="note-row"><i class="sdot ok"></i><span>Sent by ${esc(w.sent_by || '?')}${w.sent_at ? ' · ' + fmtWhen(w.sent_at) : ''}. The QFC cart gets filled next.</span></div>`;
   if (st === 'picking' && S.step > 0 && (S.data.items || []).some(i => i.source === 'recipe')) banner = `<div class="note-row"><i class="sdot warn"></i><span>Picks changed. Go back to Pick and tap Confirm portions to refresh the list.</span></div>`;
   const views = [pickView, pantryView, staplesView, listView];
-  return header('Week of ' + fmtDate(w.week_start), statusLabel(st)) + modeToggle() + steps + banner + views[S.step]();
+  return backHome() + header('Week of ' + fmtDate(w.week_start), statusLabel(st)) + presenceNote() + steps + banner + views[S.step]();
 }
 function statusLabel(st) {
   return { picking: 'Picking meals', pantry: 'Checking pantry and staples', ready_for_cart: 'Sent to cart', carted: 'In the QFC cart' }[st] || st;
@@ -298,7 +297,7 @@ function locked() {
   if (S.tab === 'quick') { const q = S.data && S.data.quick; return !q || q.status !== 'picking'; }
   return ['ready_for_cart', 'carted'].includes(weekStatus());
 }
-function allItems() { return [...(S.data.items || []), ...((S.data.quick && S.data.quick.items) || [])]; }
+function allItems() { const seen = new Set(); return [...(S.data.items || []), ...((S.data.quick && S.data.quick.items) || []), ...((S.data.basket && S.data.basket.items) || [])].filter(i => !seen.has(i.id) && seen.add(i.id)); }
 
 function pickView() {
   const opts = S.data.options || [], n = picked().length;
@@ -307,14 +306,15 @@ function pickView() {
   const moreBtn = locked() ? '' : more > 0
     ? `<button class="btn tinted" data-act="more">Show ${Math.min(6, more)} more recipes</button>`
     : `<p class="hint center">That’s everything. Add more in <a href="#" data-tab="recipes">Recipes</a>.</p>`;
-  return `<div class="sec-head"><h2>Pick this week’s meals</h2><span class="sec-sub">${msg}</span></div>`
+  return `<div class="sec-head"><h2>Pick this week’s meals</h2><span class="sec-sub">${msg}</span></div>` + ownerNote()
     + opts.map(o => {
     const open = S.open[o.recipe_id] ?? false;
     const factor = o.servings / (o.base_servings || 6);
-    return `<div class="card ${o.picked ? 'picked' : ''}">
+    const sug = mySuggestion(o.recipe_id);
+    return `<div class="card ${o.picked ? 'picked' : ''} ${sug ? 'suggested' : ''}">
       <button class="card-main" data-act="pick" data-id="${o.recipe_id}" ${locked() ? 'disabled' : ''} aria-pressed="${o.picked}">
         <div class="check">${o.picked ? IC.check : ''}</div>
-        <div class="card-txt"><div class="card-title">${esc(o.title)}</div>
+        <div class="card-txt"><div class="card-title">${esc(o.title)}</div>${sug ? `<div class="sugtag">You suggested ${sug.picked ? 'adding' : 'removing'} this</div>` : ''}
           <div class="meta">${timeMeta(o.total_time, o.total_minutes)}<span>Serves ${o.base_servings || '?'}</span><span>${lastCooked(o.last_cooked)}</span>${inAWhile(o.last_cooked) ? '<em class="long">Not in a while</em>' : ''}</div>
           ${tagPills(o.tags)}
           ${o.description ? `<div class="desc">${esc(o.description)}</div>` : ''}</div>
@@ -380,9 +380,9 @@ function pantryView() {
   const need = items.filter(i => !i.have_it).length;
   return `<div class="sec-head"><h2>Pantry check</h2><span class="sec-sub">${need} of ${items.length} to buy. Tap Have it for anything already in the kitchen.</span></div>` + itemRows(items, 'pantry') + removedFooter(all);
 }
-function addItemForm(id) {
+function addItemForm(id, title = 'Add an item') {
   const cats = CAT_ORDER.map(c => `<option value="${c}">${CAT_LABEL[c] || c}</option>`).join('');
-  return `<div class="group">Add an item</div><form id="${id}" class="list addform">
+  return `<div class="group">${title}</div><form id="${id}" class="list addform">
       <input class="field" name="name" placeholder="Item, e.g. paper towels" aria-label="Item name" required>
       <input class="field qtyf" name="qty" placeholder="Qty" aria-label="Quantity">
       <select class="field" name="category" aria-label="Aisle">${cats.replace('value="other"', 'value="other" selected')}</select>
@@ -491,7 +491,7 @@ function snackCard(r) {
     <div class="meta">${timeMeta(r.total_time, r.total_minutes)}<span>Makes ${r.servings || '?'}</span><span>${lastCooked(r.last_cooked)}</span>${r.note_count ? `<span>${r.note_count} note${r.note_count > 1 ? 's' : ''}</span>` : ''}</div>
     <div class="pills"><span class="pill kind">Snack</span>${r.status === 'trial' ? '<span class="pill trial">New</span>' : ''}${sortedTags(r.tags).map(pillBtn).join('')}</div></div></button>
     <div class="snackrow"><div class="stepper sm" aria-label="Batches"><button data-act="batch" data-id="${r.id}" data-d="-1" aria-label="fewer batches">−</button><span class="num">${b}×</span><button data-act="batch" data-id="${r.id}" data-d="1" aria-label="more batches">+</button></div>
-      <button class="btn small compact" data-act="snackAdd" data-id="${r.id}" ${(r.ingredients || []).length ? '' : 'disabled'}>Add to quick order</button></div></div>`;
+      <button class="btn small compact" data-act="snackAdd" data-id="${r.id}" ${(r.ingredients || []).length ? '' : 'disabled'}>Add to basket</button></div></div>`;
 }
 function recipeCard(r) {
   return `<div class="rcard"><button class="rcard-open rc-row" data-act="openRecipe" data-id="${r.id}" aria-label="Open ${esc(r.title)}">${coverHtml(r, 'rthumb')}<div class="rc-body">
@@ -660,15 +660,31 @@ document.addEventListener('click', async ev => {
   if (ev.target.closest('a[target=_blank]')) return;
   const el = ev.target.closest('[data-act],[data-tab],[data-step]'); if (!el || el.disabled) return;
   const d = S.data, w = d && d.week, id = +el.dataset.id;
-  if (el.dataset.tab) { ev.preventDefault(); S.tab = el.dataset.tab; S.detail = null; render.force = true; render(); window.scrollTo(0, 0); return; }
+  if (el.dataset.tab) { ev.preventDefault(); const same = S.tab === el.dataset.tab; S.tab = el.dataset.tab; S.detail = null; if (same || S.tab !== 'week') S.sub = null; render.force = true; render(); window.scrollTo(0, 0); return; }
   const act = el.dataset.act;
   if (!act && el.dataset.step != null) { S.step = +el.dataset.step; render.force = true; render(); window.scrollTo(0, 0); return; }
   const opt = () => d.options.find(o => o.recipe_id === id), item = () => allItems().find(i => i.id === id);
   switch (act) {
     case 'go': S.step = +el.dataset.step; render.force = true; render(); window.scrollTo(0, 0); break;
-    case 'pick': { const o = opt(); const v = !o.picked;
+    case 'pick': { const o = opt(), sug = mySuggestion(id); const v = sug ? !sug.picked : !o.picked;
+      if (!isOwner()) { mutate('set_pick', { p_week: w.id, p_recipe: id, p_picked: v, p_who: S.who }, null, r => { if (r === 'suggested') toast(`Suggested to ${w.owner}`); }); break; }
       if (v && picked().length >= 3) toast('That makes ' + (picked().length + 1) + '. Three is the goal.');
-      mutate('set_pick', { p_week: w.id, p_recipe: id, p_picked: v }, () => { o.picked = v; if (w.status === 'pantry') w.status = 'picking'; }); break; }
+      mutate('set_pick', { p_week: w.id, p_recipe: id, p_picked: v, p_who: S.who }, () => { o.picked = v; if (!w.owner) w.owner = S.who; if (w.status === 'pantry') w.status = 'picking'; }); break; }
+    case 'sugAnswer': mutate('answer_suggestion', { p_week: w.id, p_recipe: id, p_by: el.dataset.by, p_accept: el.dataset.ok === '1', p_who: S.who }); break;
+    case 'askEdit': mutate('request_edit', { p_week: w.id, p_who: S.who }, () => { w.editors = [...(w.editors || []), S.who]; }, () => toast('You can edit picks now')); break;
+    case 'home': S.sub = null; render.force = true; render(); window.scrollTo(0, 0); break;
+    case 'flow': S.sub = 'flow'; S.step = +(el.dataset.step || 0); render.force = true; render(); window.scrollTo(0, 0); break;
+    case 'planView': S.sub = 'plan'; render.force = true; render(); window.scrollTo(0, 0); break;
+    case 'basketTab': S.tab = 'basket'; S.sub = null; render.force = true; render(); window.scrollTo(0, 0); break;
+    case 'fillCart': fillCart(el); break;
+    case 'weOrdered': weOrdered(); break;
+    case 'activity': activitySheet(); break;
+    case 'orders': openOrders(); break;
+    case 'openOrder': S.sub = 'order'; S.orderId = id; render.force = true; render(); window.scrollTo(0, 0); break;
+    case 'backOrders': S.sub = 'orders'; render.force = true; render(); break;
+    case 'backBasket': S.sub = null; render.force = true; render(); window.scrollTo(0, 0); break;
+    case 'reorder': reorder(id, el); break;
+    case 'orderStatus': orderStatus(id, el.dataset.status); break;
     case 'serv': { const o = opt(); const v = Math.max(1, Math.min(30, o.servings + +el.dataset.d));
       mutate('set_servings', { p_week: w.id, p_recipe: id, p_servings: v }, () => { o.servings = v; if (w.status === 'pantry') w.status = 'picking'; }); break; }
     case 'more': {
@@ -686,12 +702,7 @@ document.addEventListener('click', async ev => {
     case 'have': { const i = item(); const v = !i.have_it; mutate('set_item', { p_item: id, p_have_it: v, p_include: null, p_qty: null }, () => { i.have_it = v; }); break; }
     case 'inc': { const i = item(); const v = !i.include; mutate('set_item', { p_item: id, p_have_it: null, p_include: v, p_qty: null }, () => { i.include = v; }); break; }
     case 'rm': { mutate('remove_item', { p_item: id }, () => { d.items = d.items.filter(i => i.id !== id); if (d.quick) d.quick.items = d.quick.items.filter(i => i.id !== id); }); break; }
-    case 'send':
-      el.disabled = true;
-      { let sent = false;
-        await mutate('set_week_status', { p_week: w.id, p_status: 'ready_for_cart', p_who: S.who }, () => { w.status = 'ready_for_cart'; w.sent_by = S.who; w.sent_at = new Date().toISOString(); }, () => { sent = true; });
-        if (sent) { notifyAssistant('send_to_cart', { week_id: w.id }); toast('Sent. The cart gets filled next.'); } }
-      break;
+    case 'send': fillCart(el); break;
     case 'reopen': mutate('set_week_status', { p_week: w.id, p_status: 'pantry', p_who: S.who }, () => { w.status = 'pantry'; }); break;
     case 'ftag': { const k = el.dataset.key; S[k] = S[k].includes(id) ? S[k].filter(x => x !== id) : [...S[k], id]; render.force = true; render(); break; }
     case 'fclear': S[el.dataset.key] = []; render.force = true; render(); break;
@@ -727,8 +738,8 @@ document.addEventListener('click', async ev => {
       const items = Ingredients.combine([{ picked: true, title: r.title, servings: (r.servings || 1) * b, base_servings: r.servings || 1, ingredients: r.ingredients || [] }])
         .map(({ name, qty, category, have_it }) => ({ name, qty, category, have_it }));
       let ok = false; el.disabled = true; el.textContent = 'Adding…';
-      await mutate('quick_add_recipe', { p_recipe: id, p_batches: b, p_items: items, p_who: S.who }, null, () => { ok = true; });
-      if (ok) { toast(`Added ${r.title} ×${b} to the quick order`); S.tab = 'quick'; render.force = true; render(); window.scrollTo(0, 0); }
+      await mutate('basket_add_recipe', { p_recipe: id, p_batches: b, p_items: items, p_who: S.who }, null, () => { ok = true; });
+      if (ok) { toast(`Added ${r.title} ×${b} to the basket`); S.tab = 'basket'; S.sub = null; render.force = true; render(); window.scrollTo(0, 0); }
       break; }
     case 'startOver': startOver(); break;
     case 'showRecipe': showRecipe(id); break;
@@ -752,7 +763,14 @@ document.addEventListener('change', ev => {
 document.addEventListener('keydown', ev => { if (ev.key === 'Enter' && ev.target.dataset.act === 'qty') ev.target.blur(); });
 document.addEventListener('submit', async ev => {
   const f = ev.target;
-  if (f.id === 'addForm' || f.id === 'addFormQuick') {
+  if (f.id === 'addFormBasket') {
+    ev.preventDefault();
+    const fd = new FormData(f), name = fd.get('name').trim(); if (!name) return;
+    document.activeElement && document.activeElement.blur();
+    await mutate('basket_add_item', { p_name: name, p_qty: fd.get('qty'), p_category: fd.get('category'), p_who: S.who });
+    toast('Added ' + name); render.force = true; render();
+  } else if (f.id === 'orderSearch') { ev.preventDefault(); document.activeElement && document.activeElement.blur();
+  } else if (f.id === 'addForm' || f.id === 'addFormQuick') {
     ev.preventDefault();
     const fd = new FormData(f), name = fd.get('name').trim(); if (!name) return;
     document.activeElement && document.activeElement.blur();
@@ -825,7 +843,8 @@ document.addEventListener('dragend', () => { if (S.drag) { S.drag = null; render
 
 async function startOver() {
   const w = S.data && S.data.week; if (!w) return;
-  if (!window.confirm('Clear all picks, pantry checks, staples and meal-plan days for this week?')) return;
+  const other = recentOther();
+  if (!(await confirmSheet({ title: 'Start this week over?', body: (other ? `${esc(other.who)} changed something ${ago(other.at)}. ` : '') + 'This clears all picks, pantry checks, staples and meal-plan days for this week.', ok: 'Start over', danger: true }))) return;
   let ok = false;
   await mutate('reset_week', { p_week: w.id }, () => {
     S.data.options.forEach(o => { o.picked = false; o.servings = 6; o.planned_date = null; }); S.data.items = []; w.status = 'picking'; w.sent_by = null; w.sent_at = null;
@@ -953,6 +972,7 @@ async function savePhotos(btn) {
 setInterval(() => { if (!document.hidden) refresh(); }, POLL_MS);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
 window.addEventListener('focus', () => refresh());
+setInterval(() => { if (!document.hidden) heartbeat(); }, 30000);
 render();
 if (S.code && S.who) refresh(true);
 
@@ -1007,8 +1027,8 @@ function hideUndo() { const u = $('#undo'); if (u) u.classList.remove('show'); }
 window.addEventListener('pagehide', flushPending);
 document.addEventListener('visibilitychange', () => { if (document.hidden) flushPending(); });
 
-function findItem(d, id) { return [...(d.items || []), ...((d.quick && d.quick.items) || [])].find(i => i.id === id); }
-function dropItem(d, id) { d.items = (d.items || []).filter(i => i.id !== id); if (d.quick) d.quick.items = (d.quick.items || []).filter(i => i.id !== id); }
+function findItem(d, id) { return [...(d.items || []), ...((d.quick && d.quick.items) || []), ...((d.basket && d.basket.items) || [])].find(i => i.id === id); }
+function dropItem(d, id) { d.items = (d.items || []).filter(i => i.id !== id); if (d.basket) d.basket.items = (d.basket.items || []).filter(i => i.id !== id); if (d.quick) d.quick.items = (d.quick.items || []).filter(i => i.id !== id); }
 async function swipeAction(act, id, el) {
   closeSwipe(SW.open, true);
   const d = S.data;
@@ -1153,3 +1173,269 @@ async function checkVersion() {
     return m && cur && m[1] !== cur ? m[1] : null;
   } catch (e) { return null; }
 }
+
+/* ======================= household basket, home timeline, orders, activity, presence ======================= */
+const usd = n => '$' + Math.round(n);
+function ago(ts) { const m = Math.round((Date.now() - new Date(ts)) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} hr ago` : fmtWhen(ts); }
+function fmtShort(ts) { return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); }
+function backHome() { return `<button class="backlink" data-act="home">${IC.back}Home</button>`; }
+function basket() { return (S.data && S.data.basket) || { items: [], weeks: [] }; }
+function basketCounts() {
+  const b = basket(), buy = (b.items || []).filter(i => i.include && !i.have_it);
+  const unc = buy.filter(i => !i.carted_at), car = buy.filter(i => i.carted_at);
+  return { b, buy, unc: unc.length, uncItems: unc, car: car.length, carItems: car, est: buy.reduce((t, i) => t + (+i.est || 4), 0) };
+}
+function itemGroup(i) { return i.source === 'recipe' && (i.recipes || []).length ? i.recipes[0].replace(/\s*\([^)]*\)\s*$/, '') : i.source === 'staple' ? 'Staples' : 'Extras'; }
+function groupCounts(items) { const g = {}; items.forEach(i => { const k = itemGroup(i); g[k] = (g[k] || 0) + 1; }); return Object.entries(g).sort((a, b) => (a[0] === 'Extras') - (b[0] === 'Extras') || (a[0] === 'Staples') - (b[0] === 'Staples') || b[1] - a[1]); }
+function cartIssue() {
+  const b = basket(), ids = [b.id, ...(b.weeks || []).map(w => w.id)];
+  return ((S.data && S.data.cart_status) || []).find(c => ids.includes(c.week_id) && ['blocked_retrying', 'partial', 'filling'].includes(c.status));
+}
+function isOwner() { const w = S.data.week; return !w || !w.owner || w.owner === S.who || (w.editors || []).includes(S.who); }
+function mySuggestion(rid) { return (S.data.suggestions || []).find(x => x.recipe_id === rid && x.by === S.who); }
+function recentOther() { return (S.data.activity || []).find(a => a.who !== S.who && a.source === 'app' && a.who !== 'Someone' && Date.now() - new Date(a.at) < 5 * 60000); }
+function ownerNote() {
+  const w = S.data.week; if (!w || locked()) return '';
+  if (!isOwner()) return `<div class="note-row"><i class="sdot"></i><span>${esc(w.owner)} is planning this week. Your picks go to ${esc(w.owner)} as suggestions.</span><button class="linkbtn strong" data-act="askEdit">Ask to edit</button></div>`;
+  const sugs = (S.data.suggestions || []).filter(x => x.by !== S.who);
+  return sugs.length ? `<div class="group">Suggestions</div><div class="list">${sugs.map(x => `<div class="row"><div class="name"><b>${esc(x.title)}</b><span class="src">${esc(x.by)} suggests ${x.picked ? 'adding' : 'removing'} it · ${ago(x.at)}</span></div>
+      <button class="toggle" data-act="sugAnswer" data-id="${x.recipe_id}" data-by="${esc(x.by)}" data-ok="0">Dismiss</button><button class="toggle on" data-act="sugAnswer" data-id="${x.recipe_id}" data-by="${esc(x.by)}" data-ok="1">Accept</button></div>`).join('')}</div>` : '';
+}
+
+/* presence: heartbeat every 30 s and on screen changes */
+function screenName() {
+  if (S.tab === 'recipes') return 'recipes';
+  if (S.tab === 'basket') return S.sub ? 'orders' : 'basket';
+  if (S.sub === 'flow') return ['pick', 'pantry', 'staples', 'list'][S.step || 0];
+  return S.sub === 'plan' ? 'plan' : 'home';
+}
+function heartbeat() { if (!S.code || !S.who) return; S.hbAt = Date.now(); S.hbScreen = screenName(); rpc('heartbeat', { p_who: S.who, p_screen: S.hbScreen }).catch(() => {}); }
+function heartbeatSoon() { if (S.hbScreen !== screenName() || !S.hbAt || Date.now() - S.hbAt > 30000) { clearTimeout(heartbeatSoon.t); heartbeatSoon.t = setTimeout(heartbeat, 400); } }
+function presenceNote() {
+  const others = ((S.data && S.data.presence) || []).filter(p => p.who !== S.who && Date.now() - new Date(p.at) < 75000);
+  if (!others.length) return '';
+  const say = { pick: 'is picking meals right now', pantry: 'is checking the pantry right now', staples: 'is going through staples right now', list: 'is looking at the list right now',
+    basket: 'is in the basket right now', plan: 'is arranging the meal plan right now', recipes: 'is browsing recipes', orders: 'is looking at past orders', home: 'is in the app' };
+  return others.map(p => `<div class="presence"><i class="live"></i>${esc(p.who)} ${say[p.screen] || 'is in the app'}</div>`).join('');
+}
+
+/* weekly rhythm (soft, never forced) */
+const RHYTHM = { 4: [0, 'Thursday is for picking meals.'], 5: [1, 'Friday is for the pantry check and extras.'], 6: [2, 'Saturday is for filling the cart.'], 0: [3, 'Sunday is for checking out.'] };
+function rhythmNote(steps) {
+  const dow = new Date(new Date(S.data.server_time || Date.now()).toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })).getDay();
+  const r = RHYTHM[dow]; if (!r || !steps[r[0]] || steps[r[0]].done) return '';
+  return `<p class="rhythm">${r[1]}</p>`;
+}
+
+/* timeline steps derived from the week + basket */
+function timeline() {
+  const w = S.data.week, c = basketCounts(), b = c.b, issue = cartIssue();
+  const weekItems = S.data.items || [], wkBasket = (weekItems.find(i => i.basket_id) || {}).basket_id;
+  const ordered = w && wkBasket && wkBasket !== b.id;                   // this week's items went out with a placed order
+  const n = w ? picked().length : 0;
+  const st = w && w.status;
+  const pickDone = !!w && (st !== 'picking' || ordered);
+  const pantryDone = !!w && (['ready_for_cart', 'carted'].includes(st) || ordered);
+  const fillDone = ordered || (c.buy.length > 0 && c.unc === 0 && !(issue && issue.status !== 'filling') && b.status !== 'ready_for_cart');
+  return [
+    { key: 'pick', title: 'Pick meals', day: 'Thu', done: pickDone, doneText: `${n} meal${n === 1 ? '' : 's'} picked${w && w.owner ? ' by ' + esc(w.owner) : ''}`,
+      body: w ? (isOwner() ? `Choose this week’s dinners. ${n ? `${n} picked so far.` : 'Aim for three.'}` : `${esc(w.owner)} is planning. You can suggest meals.`) : 'Options show up here when they’re posted.',
+      action: w ? `<button class="btn" data-act="flow" data-step="0">${n ? 'Keep picking' : 'Pick meals'}</button>` : '' },
+    { key: 'pantry', title: 'Pantry and extras', day: 'Fri', done: pantryDone, doneText: 'Pantry checked',
+      body: 'Mark what’s already in the kitchen, then go through staples and extras.',
+      action: `<button class="btn" data-act="flow" data-step="${st === 'picking' ? 0 : 1}">${st === 'picking' ? 'Confirm portions first' : 'Check the pantry'}</button>` },
+    { key: 'fill', title: 'Fill the cart', day: 'Sat', done: fillDone, doneText: `${c.car} item${c.car === 1 ? '' : 's'} in the QFC cart`,
+      body: b.status === 'ready_for_cart' ? 'The assistant is filling the QFC cart now.' : issue && issue.status !== 'filling' ? 'Waiting on QFC. The status above shows what’s going on.' : c.unc ? `${c.unc} item${c.unc === 1 ? '' : 's'} aren’t in the cart yet.` : 'Nothing to add yet.',
+      action: b.status === 'ready_for_cart' ? '<button class="btn" disabled>Filling…</button>' : c.unc ? `<button class="btn" data-act="fillCart">Fill cart · ${c.unc}</button><button class="btn ghost" data-act="basketTab">Review basket</button>` : `<button class="btn ghost" data-act="basketTab">Open basket</button>` },
+    { key: 'checkout', title: 'Check out', day: 'Sun', done: !!ordered, doneText: `Ordered${S.data.last_order && S.data.last_order.ordered_by ? ' by ' + esc(S.data.last_order.ordered_by) : ''}`,
+      body: 'Check out in the QFC app, then tap We ordered. Anything added after that goes to next week’s basket.',
+      action: `<button class="btn" data-act="weOrdered" ${c.buy.length ? '' : 'disabled'}>We ordered</button>` },
+  ];
+}
+function statusCard() {
+  const c = basketCounts(), b = c.b, issue = cartIssue();
+  let head, tone = 'info';
+  if (!c.buy.length) { head = 'Nothing to order yet.'; tone = 'idle'; }
+  else if (b.status === 'ready_for_cart') head = `Not yet. The cart is being filled with ${c.unc} item${c.unc === 1 ? '' : 's'}.`;
+  else if (issue && issue.status !== 'filling') { head = 'Not yet. ' + (issue.message || 'QFC needs attention.'); tone = 'warn'; }
+  else if (c.unc) head = `Not yet. ${c.unc} item${c.unc === 1 ? ' isn’t' : 's aren’t'} in the cart.`;
+  else { head = 'Yes. Everything is in the QFC cart.'; tone = 'ok'; }
+  const steps = timeline(), next = steps.find(s => !s.done);
+  const groups = groupCounts(c.carItems);
+  return `<section class="status ${tone}" aria-label="Order status">
+    <div class="status-q">Can we order?</div><div class="status-a"><i class="sdot"></i>${esc(head)}</div>
+    ${c.buy.length ? `<div class="status-grid">
+      <div><div class="k">In the cart</div><div class="v num">${c.car}</div></div>
+      <div><div class="k">Not yet</div><div class="v num">${c.unc}</div></div>
+      <div><div class="k">Estimate</div><div class="v num">≈ ${usd(c.est)}</div></div></div>
+      ${groups.length ? `<div class="status-groups">${groups.map(([k, n]) => `<span>${esc(k)} <b class="num">${n}</b></span>`).join('')}</div>` : ''}` : ''}
+    <div class="status-next"><span>Next</span>${next ? esc(next.title) + (next.key === 'checkout' ? ' in the QFC app' : '') : 'Next week starts Thursday'}</div></section>`;
+}
+function homeView() {
+  const steps = timeline(), cur = steps.findIndex(s => !s.done), done = steps.filter(s => s.done), w = S.data.week;
+  const act = (S.data.activity || []).slice(0, 4);
+  const curStep = steps[cur];
+  return header('This week', w ? 'Week of ' + fmtDate(w.week_start) : '') + presenceNote() + rhythmNote(steps) + statusCard()
+    + (curStep ? `<section class="now" aria-label="Current step"><div class="now-k">Step ${cur + 1} of 4 · ${curStep.day}</div><h2>${curStep.title}</h2><p>${curStep.body}</p><div class="now-actions">${curStep.action}</div></section>`
+      : `<section class="now done"><div class="now-k">All set</div><h2>Ordered</h2><p>This week’s groceries are on the way. Anything you add now goes to next week’s basket.</p><div class="now-actions"><button class="btn ghost" data-act="basketTab">Start next week’s basket</button></div></section>`)
+    + `<ol class="steps-list">${steps.map((s, i) => i === cur ? '' : `<li class="${s.done ? 'done' : 'todo'}">${s.done ? IC.check : `<span class="n">${i + 1}</span>`}<span class="t">${s.title}</span><span class="d">${s.done ? s.doneText : s.day}</span></li>`).join('')}</ol>`
+    + `<div class="list menu-list home-links">${plans().length ? `<button class="mrow" data-act="planView">${IC.week}<span><b>Meal plan</b><small>Which night for which meal</small></span>${IC.chev}</button>` : ''}
+        ${w ? `<button class="mrow" data-act="flow" data-step="${defaultStep()}">${IC.book}<span><b>Picks and list</b><small>Week of ${fmtDate(w.week_start)}</small></span>${IC.chev}</button>` : ''}
+        <button class="mrow" data-act="orders">${IC.bag}<span><b>Orders</b><small>Past orders, search, reorder</small></span>${IC.chev}</button></div>`
+    + `<div class="h2row subhead-row"><h3 class="subhead">Activity</h3><button class="hdrbtn" data-act="activity">See all</button></div>
+       <div class="list">${act.length ? act.map(activityRow).join('') : '<div class="row"><div class="name"><span class="src">Nothing yet. Changes from both of you and the assistant show up here.</span></div></div>'}</div>`;
+}
+
+/* basket tab */
+function basketView() {
+  const c = basketCounts(), b = c.b, items = b.items || [];
+  const live = items.filter(i => i.include && !i.have_it), skipped = items.filter(i => !(i.include && !i.have_it));
+  const groups = {}; live.forEach(i => (groups[itemGroup(i)] ||= []).push(i));
+  const order = Object.keys(groups).sort((a, z) => (a === 'Extras') - (z === 'Extras') || (a === 'Staples') - (z === 'Staples') || a.localeCompare(z));
+  const sub = c.buy.length ? `${c.buy.length} item${c.buy.length === 1 ? '' : 's'} · ≈ ${usd(c.est)} est.` : 'Empty';
+  const row = i => { const who = i.added_by && i.added_by !== 'staples' ? `${esc(i.added_by)} · ${fmtWhen(i.created_at)}` : i.source === 'staple' ? 'Staple' : '';
+    const r = `<div class="row ${i.carted_at ? 'carted' : ''}"><div class="name"><b>${esc(i.name)}</b><span class="src">${[i.qty && esc(i.qty), who].filter(Boolean).join(' · ')}</span></div>
+      ${i.carted_at ? '<span class="incart">In cart</span>' : `<button class="toggle add on" data-act="inc" data-id="${i.id}" aria-pressed="true">Buy</button>`}</div>`;
+    return !i.carted_at && i.source === 'custom' ? swipeWrap(r, { act: 'delItem', id: i.id, label: 'Delete' }) : !i.carted_at ? swipeWrap(r, { act: 'skipItem', id: i.id, label: 'Remove' }) : r; };
+  return header('Basket', sub, `<button class="hdrbtn" data-act="orders">Orders</button>`) + presenceNote()
+    + `<p class="hint">One basket for the next delivery. Meals, staples and extras all land here, and either of you can add anytime.</p>`
+    + addItemForm('addFormBasket', 'Add to the basket')
+    + (order.length ? order.map(g => `<div class="group">${esc(g)} · ${groups[g].length}</div><div class="list">${groups[g].map(row).join('')}</div>`).join('')
+      : `<div class="empty"><p><b>The basket is empty</b>Add an item above, pick meals, or add a snack recipe.</p></div>`)
+    + (skipped.length ? `<details class="skipped"><summary>Skipped or already at home · ${skipped.length}</summary><div class="list">${skipped.map(i => `<div class="row dim"><div class="name"><b>${esc(i.name)}</b><span class="src">${esc(itemGroup(i))}</span></div>
+        ${i.include ? '' : `<button class="toggle add" data-act="inc" data-id="${i.id}">Add back</button>`}</div>`).join('')}</div></details>` : '');
+}
+function basketActionBar() {
+  const c = basketCounts(); if (!c.buy.length) return '';
+  if (c.b.status === 'ready_for_cart') return `<div class="actionbar"><div class="inner"><button class="btn" disabled>Filling the cart…</button></div></div>`;
+  return `<div class="actionbar"><div class="inner">${c.unc ? `<button class="btn" data-act="fillCart">Fill cart · ${c.unc} new</button>` : `<button class="btn" data-act="weOrdered">We ordered</button>`}</div></div>`;
+}
+async function fillCart(el) {
+  const c = basketCounts(); if (!c.unc) return toast('Everything is already in the cart');
+  const other = recentOther();
+  if (other && !(await confirmSheet({ title: 'Fill the cart now?', body: `${esc(other.who)} changed something ${ago(other.at)}. ${c.unc} item${c.unc === 1 ? '' : 's'} will be added to the QFC cart.`, ok: 'Fill cart' }))) return;
+  if (el) el.disabled = true;
+  let n = 0;
+  await mutate('basket_send', { p_who: S.who }, () => { c.b.status = 'ready_for_cart'; }, r => { n = r; });
+  if (n) { notifyAssistant('send_to_cart', { week_id: c.b.id }); toast(`Sent ${n} item${n === 1 ? '' : 's'}. The cart gets filled next.`); }
+}
+async function weOrdered() {
+  const c = basketCounts(), other = recentOther();
+  const body = (other ? `${esc(other.who)} changed something ${ago(other.at)}. ` : '') + (c.unc ? `${c.unc} item${c.unc === 1 ? ' isn’t' : 's aren’t'} in the cart yet and will stay behind. ` : '')
+    + 'This locks the order. Anything added after this goes to next week’s basket.';
+  if (!(await confirmSheet({ title: 'Mark this order as placed?', body, ok: 'We ordered' }))) return;
+  let ok = false; await mutate('mark_ordered', { p_who: S.who }, null, () => { ok = true; });
+  if (ok) { toast('Ordered. A fresh basket is ready.'); S.orders = null; }
+}
+
+/* activity */
+const nameList = a => { const ns = (a.names || []).map(esc); return ns.length <= 2 ? ns.join(' and ') : `${ns.slice(0, 2).join(', ')} and ${a.n - 2} more`; };
+function activityText(a) {
+  const d = a.detail || {}, N = nameList(a), cnt = a.n > 1 ? `${a.n} items` : N;
+  const day = x => x ? dayName(x) + ' ' + fmtDate(x) : '';
+  const T = {
+    pick: `picked ${N}`, unpick: `removed ${N} from the picks`, servings: `set ${N} to ${d.to} servings`, plan_day: d.to ? `moved ${N} to ${day(d.to)}` : `unscheduled ${N}`,
+    'item.add': `added ${N}`, 'item.remove': `removed ${N}`, 'item.have': `has ${N} at home`, 'item.need': `needs ${N} after all`, 'item.skip': `skipped ${N}`, 'item.buy': `will buy ${N}`,
+    'item.qty': `changed ${N} to ${esc(d.to || '')}`, 'item.carted': `put ${a.n} item${a.n === 1 ? '' : 's'} in the QFC cart`,
+    'week.status': d.kind === 'basket' ? ({ ready_for_cart: 'asked to fill the cart', carted: 'finished filling the cart', picking: 'reopened the basket' }[d.to] || `set the basket to ${d.to}`)
+      : ({ ready_for_cart: 'sent the week to the cart', pantry: 'moved the week to the pantry check', carted: 'marked the week as carted', picking: 'reopened picking' }[d.to] || `set the order to ${d.to}`),
+    'basket.ordered': 'marked the order as placed', 'week.owner': `is planning this week`, 'week.edit_override': 'asked to edit the picks',
+    'recipe.add': `added the recipe ${N}`, 'recipe.delete': `deleted ${N}`, 'recipe.restore': `restored ${N}`, 'recipe.time': `set ${N} to ${esc(d.to || '')}`, 'recipe.photo': `changed the photo of ${N}`,
+    'recipe.import': `imported ${N}`, 'note.add': `added a note to ${N}`, 'note.delete': `deleted a note on ${N}`, 'tag.on': `tagged ${N}`, 'tag.off': `untagged ${N}`,
+    'cart.status': ({ filling: `is filling the cart${d.total ? ` (${d.added || 0} of ${d.total})` : ''}`, blocked_retrying: `hit a QFC problem${d.message ? ': ' + esc(d.message) : ''}`,
+      partial: `filled the cart except a few items${d.message ? ': ' + esc(d.message) : ''}`, done: 'filled the cart' }[d.status] || 'updated the cart'),
+    'week.confirm': `confirmed portions (${d.n || 0} ingredients)`, 'week.reset': 'started the week over', 'basket.recipe': `added ${esc(d.title || '')} ×${d.batches || 1} to the basket`,
+    'basket.reorder': `reordered ${d.n ?? ''} items from order #${d.from}`, 'pick.suggest': `suggested ${d.picked ? 'adding' : 'removing'} ${N}`,
+    'pick.accept': `accepted ${esc(d.by || '')}’s suggestion: ${N}`, 'pick.dismiss': `passed on ${esc(d.by || '')}’s suggestion: ${N}`,
+    undo: `undid a change${a.names && a.names.length ? ' to ' + N : ''}`,
+  };
+  return T[a.kind] || `${a.kind.replace(/[._]/g, ' ')} ${cnt}`;
+}
+function activityRow(a, withUndo) {
+  return `<div class="row act ${a.undone_at ? 'undone' : ''}"><div class="name"><b><span class="who-n">${esc(a.who || 'Someone')}</span> ${activityText(a)}</b>
+    <span class="src">${ago(a.at)}${a.undone_at ? ` · undone by ${esc(a.undone_by || '?')}` : ''}</span></div>
+    ${withUndo && a.undoable ? `<button class="toggle" data-undo="${a.id}">Undo</button>` : ''}</div>`;
+}
+function activitySheet() {
+  const bg = document.createElement('div'); bg.className = 'sheet-bg';
+  const draw = () => { const list = S.data.activity || [];
+    bg.innerHTML = `<div class="sheet tall" role="dialog" aria-label="Activity"><i class="grab"></i><h2 class="sheet-h">Activity</h2>
+      <p class="hint">Everything either of you or the assistant changed this week. Changes from the last 24 hours can be undone.</p>
+      <div class="list">${list.length ? list.map(a => activityRow(a, true)).join('') : '<div class="row"><div class="name"><span class="src">Nothing yet.</span></div></div>'}</div>
+      <button class="btn ghost" data-close>Done</button></div>`; };
+  draw();
+  bg.onclick = async e => {
+    if (e.target === bg || e.target.hasAttribute('data-close')) return bg.remove();
+    const u = e.target.closest('[data-undo]'); if (!u) return;
+    u.disabled = true; u.textContent = '…';
+    try { await rpc('undo_activity', { p_id: +u.dataset.undo, p_who: S.who }); toast('Undone'); } catch (err) { handleErr(err); }
+    await refresh(true); render.force = true; render(); draw();
+  };
+  document.body.appendChild(bg);
+}
+
+/* orders history */
+const ORDER_STATUS = { picking: 'Building', ready_for_cart: 'Building', carted: 'In cart', ordered: 'Ordered', delivered: 'Delivered', canceled: 'Canceled' };
+async function openOrders() {
+  S.tab = 'basket'; S.sub = 'orders'; render.force = true; render(); window.scrollTo(0, 0);
+  try { S.orders = await rpc('get_orders'); } catch (e) { handleErr(e); }
+  render.force = true; render();
+}
+function orderLabel(o) {
+  const st = o.status === 'picking' && (o.items || []).some(i => i.carted_at) ? 'carted' : o.status;
+  return ORDER_STATUS[st] || st;
+}
+function orderDate(o) { return o.ordered_at || o.sent_at || o.created_at; }
+function orderMatches(o, q) {
+  if (!q) return null;
+  const w = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const hit = (o.items || []).filter(i => w.every(x => (i.name + ' ' + (i.recipes || []).join(' ')).toLowerCase().includes(x)));
+  const meals = (o.meals || []).filter(m => w.every(x => m.toLowerCase().includes(x)));
+  return hit.length || meals.length ? { hit, meals } : false;
+}
+function ordersView() {
+  const list = S.orders;
+  const back = `<button class="backlink" data-act="backBasket">${IC.back}Basket</button>`;
+  if (!list) return back + header('Orders') + '<p class="hint">Loading…</p>';
+  const q = S.oq.trim(), rows = list.map(o => ({ o, m: orderMatches(o, q) })).filter(x => !q || x.m);
+  const last = q && rows.find(x => x.o.status !== 'canceled');
+  return back + header('Orders', `${list.length} order${list.length === 1 ? '' : 's'}`)
+    + `<form id="orderSearch" class="searchrow"><label class="search">${IC.search}<input id="osearch" type="search" placeholder="Search items or meals, e.g. fennel" value="${esc(S.oq)}" aria-label="Search orders" autocomplete="off"></label></form>`
+    + (q ? `<p class="hint">${last ? `Last bought ${fmtShort(orderDate(last.o))}: ${esc([...last.m.hit.map(i => i.name + (i.qty ? ` (${i.qty})` : '')), ...last.m.meals].slice(0, 3).join(', '))}` : `No orders with “${esc(q)}”.`}</p>` : '')
+    + `<div class="glist orders">${rows.map(({ o, m }) => `<button class="rcard order-row" data-act="openOrder" data-id="${o.id}">
+        <div class="rc-top"><div class="card-title">${fmtShort(orderDate(o))} <span class="ost s-${esc(orderLabel(o).toLowerCase().replace(' ', ''))}">${orderLabel(o)}</span></div>${IC.chev}</div>
+        <div class="meta"><span class="num">${o.items.length} items</span><span class="num">≈ ${usd(o.est)}</span>${o.sent_by ? `<span>Sent by ${esc(o.sent_by)}</span>` : ''}${o.ordered_by ? `<span>Ordered by ${esc(o.ordered_by)}</span>` : ''}</div>
+        ${(o.meals || []).length ? `<div class="desc">${o.meals.map(esc).join(' · ')}</div>` : ''}
+        ${m && m.hit.length ? `<div class="pills">${m.hit.slice(0, 4).map(i => `<span class="pill trial">${esc(i.name)}</span>`).join('')}</div>` : ''}</button>`).join('')}</div>`;
+}
+function orderView() {
+  const o = (S.orders || []).find(x => x.id === S.orderId);
+  const back = `<button class="backlink" data-act="backOrders">${IC.back}Orders</button>`;
+  if (!o) return back + '<p class="hint">Order not found.</p>';
+  const groups = {}; o.items.forEach(i => (groups[itemGroup(i)] ||= []).push(i));
+  const isCurrent = o.id === basket().id;
+  const tl = [{ at: o.created_at, t: 'Basket started' }, ...(o.includes || []).filter(x => x.sent_at).map(x => ({ at: x.sent_at, t: `${x.kind === 'quick' ? 'Quick order #' + x.id : 'Week of ' + fmtDate(x.week_start)} sent to cart by ${esc(x.sent_by || '?')}` })),
+    ...(o.timeline || []).map(a => ({ at: a.at, t: `${esc(a.who || '')} ${activityText({ ...a, names: [], n: a.n || 1 })}` })),
+    o.ordered_at && { at: o.ordered_at, t: `Ordered by ${esc(o.ordered_by || '?')}` }, o.delivered_at && { at: o.delivered_at, t: 'Delivered' }, o.canceled_at && { at: o.canceled_at, t: 'Canceled' }]
+    .filter(Boolean).sort((a, b) => new Date(a.at) - new Date(b.at));
+  const inc = (o.includes || []).map(x => x.kind === 'quick' ? `Quick order #${x.id}` : `Week of ${fmtDate(x.week_start)} plan`);
+  return back + header(fmtShort(orderDate(o)), `${orderLabel(o)} · ${o.items.length} items · ≈ ${usd(o.est)} est.`)
+    + (inc.length ? `<p class="hint">Includes ${inc.join(' and ')}.</p>` : '')
+    + `<div class="btnrow order-actions">${isCurrent ? `<button class="btn ghost" data-act="backBasket">Open in basket</button>` : `<button class="btn" data-act="reorder" data-id="${o.id}">Reorder</button>`}
+        ${o.status === 'ordered' ? `<button class="btn ghost" data-act="orderStatus" data-id="${o.id}" data-status="delivered">Mark delivered</button>` : ''}</div>`
+    + Object.keys(groups).sort((a, z) => (a === 'Extras') - (z === 'Extras') || (a === 'Staples') - (z === 'Staples') || a.localeCompare(z)).map(g => `<div class="group">${esc(g)} · ${groups[g].length}</div>
+        <div class="list">${groups[g].map(i => `<div class="row"><div class="name"><b>${esc(i.name)}</b><span class="src">${[i.qty && esc(i.qty), i.added_by && i.added_by !== 'staples' && 'Added by ' + esc(i.added_by)].filter(Boolean).join(' · ')}</span></div>${i.carted_at ? '<span class="incart">In cart</span>' : ''}</div>`).join('')}</div>`).join('')
+    + `<h3 class="subhead">Timeline</h3><ol class="otl">${tl.map(x => `<li><span class="d">${fmtWhen(x.at)}</span>${x.t}</li>`).join('')}</ol>`
+    + (o.status === 'ordered' ? `<div class="center"><button class="linkbtn quiet" data-act="orderStatus" data-id="${o.id}" data-status="canceled">Mark as canceled</button></div>` : '');
+}
+async function reorder(id, el) {
+  el.disabled = true; let n = 0;
+  await mutate('reorder', { p_order: id, p_who: S.who }, null, r => { n = r; });
+  toast(`Added ${n} item${n === 1 ? '' : 's'} to the basket`); S.tab = 'basket'; S.sub = null; S.orders = null; render.force = true; render(); window.scrollTo(0, 0);
+}
+async function orderStatus(id, status) {
+  if (status === 'canceled' && !(await confirmSheet({ title: 'Mark this order as canceled?', body: 'Use this if the QFC order was canceled. Items stay in the history.', ok: 'Mark canceled', danger: true }))) return;
+  await mutate('set_order_status', { p_order: id, p_status: status, p_who: S.who });
+  S.orders = await rpc('get_orders').catch(() => S.orders); render.force = true; render();
+}
+document.addEventListener('input', ev => { if (ev.target.id === 'osearch') { S.oq = ev.target.value; const pos = ev.target.selectionStart; render.force = true; render(); const i = $('#osearch'); if (i) { i.focus(); i.setSelectionRange(pos, pos); } } });
