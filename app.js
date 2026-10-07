@@ -12,6 +12,7 @@ const S = {
   code: localStorage.getItem('mp_code') || '',
   who: localStorage.getItem('mp_who') || '',
   data: null, tab: 'week', step: null, open: {}, batches: {}, busy: 0, seq: 0, lastSync: null, error: null,
+  noteDraft: {}, tagFilter: [] /* Recipes tab tag filter (AND) */, pickTags: [] /* Pick step tag filter */, detail: null /* {id, r, loading} recipe detail page */,
   mode: null /* 'plan' | 'shop' on This week */, sel: null /* meal picked up for scheduling: {w, r} */, drag: null,
 };
 
@@ -90,7 +91,7 @@ function render() {
   const app = $('#app');
   // don't clobber a field the user is typing in
   const ae = document.activeElement;
-  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT') && app.contains(ae) && S.data && !render.force) return;
+  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT' || ae.tagName === 'TEXTAREA') && app.contains(ae) && S.data && !render.force) return;
   if (S.drag && S.data && !render.force) return; // don't rebuild the page mid-drag
   render.force = false;
   if (!S.code || !S.who) { app.innerHTML = loginView(); return bindLogin(); }
@@ -280,17 +281,23 @@ function pickView() {
   const moreBtn = locked() ? '' : more > 0
     ? `<button class="btn ghost" data-act="more" style="margin:6px 0 4px">➕ More recipes <small style="font-weight:500;opacity:.75">(${Math.min(6, more)} more from the library)</small></button>`
     : `<div class="empty" style="padding:18px 8px"><p>That's all for now — add a recipe link in the <a href="#" data-tab="recipes">Recipes tab</a>.</p></div>`;
-  return `<h2>Pick this week's meals</h2><p class="hint">${msg}${pickedNames ? `<br><b style="color:var(--accent-dark)">✓ ${pickedNames}</b>` : ''}</p>` + opts.map(o => {
+  const shown = opts.filter(o => o.picked || hasTags(o.tags, S.pickTags));
+  const usedTags = new Set(opts.flatMap(o => o.tags || []));
+  return `<h2>Pick this week's meals</h2><p class="hint">${msg}${pickedNames ? `<br><b style="color:var(--accent-dark)">✓ ${pickedNames}</b>` : ''}</p>`
+    + tagFilterBar('pickTags', [...usedTags])
+    + (shown.length ? '' : `<div class="empty" style="padding:14px 8px"><p>No options match those tags.</p></div>`)
+    + shown.map(o => {
     const open = S.open[o.recipe_id] ?? false;
     const factor = o.servings / (o.base_servings || 6);
     return `<div class="card ${o.picked ? 'picked' : ''}">
       <button class="card-main" data-act="pick" data-id="${o.recipe_id}" ${locked() ? 'disabled' : ''} aria-pressed="${o.picked}">
         <div class="check">${o.picked ? '✓' : ''}</div>
         <div><div class="card-title">${esc(o.title)}</div>
-          <div class="meta"><span>⏱ ${esc(o.total_time || '?')}</span><span>Serves ${o.base_servings || '?'} as written</span></div>
+          <div class="meta"><span>⏱ ${esc(o.total_time || '?')}</span><span>Serves ${o.base_servings || '?'} as written</span><span>${lastCooked(o.last_cooked)}</span></div>
+          ${tagPills(o.tags)}
           ${o.description ? `<div class="desc">${esc(o.description)}</div>` : ''}</div>
       </button>
-      <div style="padding:0 16px 10px 62px" class="meta"><a href="${esc(o.url)}" target="_blank" rel="noopener">View recipe ↗</a></div>
+      <div style="padding:0 16px 10px 62px" class="meta">${o.url ? `<a href="${esc(o.url)}" target="_blank" rel="noopener">View recipe ↗</a>` : `<button class="linkbtn" style="padding:0;min-height:0;font-size:14px" data-act="showRecipe" data-id="${o.recipe_id}">View recipe →</button>`}</div>
       ${o.picked ? `<div class="card-body">
         <div class="serv"><div class="serv-label">Servings<small>6 = 2 adults + 2 kids + lunches</small></div>
           <div class="stepper"><button data-act="serv" data-id="${o.recipe_id}" data-d="-1" aria-label="fewer" ${locked() ? 'disabled' : ''}>−</button><span>${o.servings}</span><button data-act="serv" data-id="${o.recipe_id}" data-d="1" aria-label="more" ${locked() ? 'disabled' : ''}>+</button></div></div>
@@ -405,35 +412,116 @@ function quickActionBar() {
   const n = (q.items || []).filter(i => i.include && !i.have_it).length;
   return `<div class="actionbar"><div class="inner"><button class="btn green huge" data-act="quickSend" ${n ? '' : 'disabled'}>🛒 Send to cart${n ? ` (${n})` : ''}</button></div></div>`;
 }
+/* ---------- tags ---------- */
+function tagName(id) { const t = (S.data.tags || []).find(x => x.id === id); return t ? t.name : ''; }
+function sortedTags(ids) { return (ids || []).map(id => ({ id, name: tagName(id) })).filter(t => t.name).sort((a, b) => a.name.localeCompare(b.name)); }
+// multi-select tag filter = AND: a recipe must have every selected tag
+function hasTags(ids, sel) { return !sel.length || sel.every(t => (ids || []).includes(t)); }
+function tagPills(ids) { const t = sortedTags(ids); return t.length ? `<div class="tagpills">${t.map(x => `<span class="tagpill">${esc(x.name)}</span>`).join('')}</div>` : ''; }
+function tagFilterBar(key, ids) {
+  const tags = sortedTags(ids); if (!tags.length) return '';
+  S[key] = S[key].filter(id => ids.includes(id));
+  const sel = S[key];
+  return `<div class="tagbar" role="group" aria-label="Filter by tag">${tags.map(t => `<button class="fchip ${sel.includes(t.id) ? 'on' : ''}" data-act="ftag" data-key="${key}" data-id="${t.id}" aria-pressed="${sel.includes(t.id)}">${sel.includes(t.id) ? '✓ ' : ''}${esc(t.name)}</button>`).join('')}
+    ${sel.length ? `<button class="fchip clear" data-act="fclear" data-key="${key}">Clear</button>` : ''}</div>
+    ${sel.length > 1 ? `<p class="hint" style="margin:-4px 0 12px;font-size:13px">Showing recipes with <b>all</b> of: ${sel.map(id => esc(tagName(id))).join(' + ')}</p>` : ''}`;
+}
+function lastCooked(d) { return `Last cooked: ${d ? fmtDate(d) : 'Never'}`; }
+
 function snackCard(r) {
   const b = S.batches[r.id] || 1;
-  return `<div class="rcard"><span class="badge b-${esc(r.status)}">${esc(r.status)}</span> <span class="badge b-snack">Snack/baking</span>
-    <div class="card-title" style="margin-top:6px">${esc(r.title)}</div>
-    <div class="meta"><span>⏱ ${esc(r.total_time || '?')}</span><span>Makes ${r.servings || '?'} per batch</span>${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">Recipe ↗</a>` : ''}</div>
+  return `<div class="rcard"><button class="rcard-open" data-act="openRecipe" data-id="${r.id}" aria-label="Open ${esc(r.title)}">
+    <span class="badge b-${esc(r.status)}">${esc(r.status)}</span> <span class="badge b-snack">Snack/baking</span>
+    <div class="card-title" style="margin-top:6px">${esc(r.title)} <span class="chev">›</span></div>
+    <div class="meta"><span>⏱ ${esc(r.total_time || '?')}</span><span>Makes ${r.servings || '?'} per batch</span>${r.note_count ? `<span>📝 ${r.note_count}</span>` : ''}</div>
+    ${tagPills(r.tags)}</button>
     <div class="serv"><div class="serv-label">Batches</div>
       <div class="stepper"><button data-act="batch" data-id="${r.id}" data-d="-1" aria-label="fewer batches">−</button><span>${b}</span><button data-act="batch" data-id="${r.id}" data-d="1" aria-label="more batches">+</button></div></div>
     <button class="btn small" data-act="snackAdd" data-id="${r.id}" ${(r.ingredients || []).length ? '' : 'disabled'}>🛒 Add ingredients to order</button></div>`;
 }
+function recipeCard(r) {
+  return `<div class="rcard"><button class="rcard-open" data-act="openRecipe" data-id="${r.id}" aria-label="Open ${esc(r.title)}">
+    <span class="badge b-${esc(r.status)}">${esc(r.status)}</span>
+    <div class="card-title" style="margin-top:6px">${esc(r.title)} <span class="chev">›</span></div>
+    <div class="meta"><span>⏱ ${esc(r.total_time || '?')}</span><span>Serves ${r.servings || '?'}</span><span>${lastCooked(r.last_cooked)}</span>${r.note_count ? `<span>📝 ${r.note_count} note${r.note_count > 1 ? 's' : ''}</span>` : ''}</div>
+    ${tagPills(r.tags)}</button></div>`;
+}
 function recipesView() {
+  if (S.detail) return recipeDetailView();
   const all = S.data.recipes || [];
-  const snacks = all.filter(r => r.recipe_type === 'snack/baking' && r.status !== 'pending' && r.status !== 'retired');
-  const rs = all.filter(r => !snacks.includes(r));
-  return header('Recipes', `${all.filter(r => r.status !== 'pending').length} in the library`) + `
-    <button class="btn" data-act="addRecipe" style="margin:0 0 18px">➕ Add recipe</button>` +
+  const lib = all.filter(r => r.status !== 'pending');
+  const bar = tagFilterBar('tagFilter', [...new Set(lib.flatMap(r => r.tags || []))]);
+  const match = r => r.status === 'pending' ? !S.tagFilter.length : hasTags(r.tags, S.tagFilter);
+  const snacks = all.filter(r => r.recipe_type === 'snack/baking' && r.status !== 'pending' && r.status !== 'retired' && match(r));
+  const rs = all.filter(r => !(r.recipe_type === 'snack/baking' && r.status !== 'pending' && r.status !== 'retired') && match(r));
+  const none = !snacks.length && !rs.length ? `<div class="empty"><div class="e">🏷️</div><p>No recipes have all of those tags.</p></div>` : '';
+  return header('Recipes', `${lib.length} in the library`) + `
+    <button class="btn" data-act="addRecipe" style="margin:0 0 14px">➕ Add recipe</button>` + bar + none +
     (snacks.length ? `<div class="group" style="font-size:15px;color:var(--ink);margin-top:4px">🧁 Snacks & Baking</div>${snacks.map(snackCard).join('')}
-      <div class="group" style="font-size:15px;color:var(--ink);margin-top:22px">🍽️ Dinners</div>` : '') +
+      ${rs.length ? `<div class="group" style="font-size:15px;color:var(--ink);margin-top:22px">🍽️ Dinners</div>` : ''}` : '') +
     rs.map(r => r.status === 'pending' && r.photo_count ? `<div class="rcard"><span class="badge b-pending">📷 Processing…</span>
         <div class="card-title" style="margin-top:6px">${esc(r.title)}</div>
         <div class="meta">${r.photo_count} photo${r.photo_count > 1 ? 's' : ''} · added by ${esc(r.added_by || '?')} — the assistant will type it up and add it to the library.</div></div>`
       : r.status === 'pending' ? `<div class="rcard"><span class="badge b-pending">Importing soon</span>
         <div class="card-title" style="margin-top:6px;word-break:break-all;font-size:15px">${esc(r.url)}</div>
         <div class="meta">Added by ${esc(r.added_by || '?')} — ingredients get filled in by the assistant.${r.notes ? ' ' + esc(r.notes) : ''}</div></div>`
-      : `<div class="rcard"><span class="badge b-${esc(r.status)}">${esc(r.status)}</span>
-        <div class="card-title" style="margin-top:6px">${esc(r.title)}</div>
-        <div class="meta"><span>⏱ ${esc(r.total_time || '?')}</span><span>Serves ${r.servings || '?'}</span>${r.last_cooked ? `<span>Last: ${fmtDate(r.last_cooked)}</span>` : ''}${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">Recipe ↗</a>` : ''}</div>
-        <div class="vbtns"><button class="vbtn keep ${r.verdict === 'keep' ? 'on' : ''}" data-act="verdict" data-v="keep" data-id="${r.id}">👍 Keep</button>
-          <button class="vbtn swap ${r.verdict === 'swap' ? 'on' : ''}" data-act="verdict" data-v="swap" data-id="${r.id}">🔄 Swap out</button></div>
-        ${r.verdict ? `<div class="meta">Last vote: ${r.verdict} by ${esc(r.verdict_by || '?')}</div>` : ''}</div>`).join('');
+      : recipeCard(r)).join('');
+}
+
+/* ---------- recipe detail page (tags, notes, delete) ---------- */
+function fmtNoteTime(ts) {
+  const d = new Date(ts), now = new Date();
+  const sameYear = d.getFullYear() === now.getFullYear();
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }) }) + ' · ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+async function openRecipe(id, keepScroll) {
+  S.detail = { id, r: S.detail && S.detail.id === id ? S.detail.r : null, loading: true, tagEdit: S.detail && S.detail.id === id && S.detail.tagEdit };
+  render.force = true; render(); if (!keepScroll) window.scrollTo(0, 0);
+  try { const r = await rpc('get_recipe', { p_id: id }); if (!S.detail || S.detail.id !== id) return;
+    if (!r) { S.detail = null; toast('That recipe was deleted'); } else { S.detail.r = r; S.detail.loading = false; } }
+  catch (e) { handleErr(e); if (S.detail) S.detail.loading = false; }
+  render.force = true; render();
+}
+function recipeDetailView() {
+  const dt = S.detail, lib = (S.data.recipes || []).find(x => x.id === dt.id);
+  const back = `<button class="backlink" data-act="closeRecipe">‹ Recipes</button>`;
+  if (!lib) return back + `<div class="empty"><p>This recipe is no longer in the library.</p></div>`;
+  const r = dt.r || {}, notes = r.notes || [], tags = lib.tags || [];
+  const allTags = (S.data.tags || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+  const tagSection = dt.tagEdit
+    ? `<div class="chips tagedit">${allTags.map(t => { const on = tags.includes(t.id); return `<button class="tchip ${on ? 'on' : ''}" data-act="toggleTag" data-id="${t.id}" aria-pressed="${on}">${on ? '✓ ' : '+ '}${esc(t.name)}</button>`; }).join('')}</div>
+       <form id="newTagForm" class="inline-form"><input class="field" name="tag" maxlength="30" placeholder="New tag, e.g. Date night" autocomplete="off" aria-label="New tag name"><button class="btn small compact" type="submit">Add tag</button></form>
+       <button class="linkbtn" data-act="tagEdit">Done</button>`
+    : `<div class="chips">${sortedTags(tags).map(t => `<span class="tchip on static">${esc(t.name)}</span>`).join('') || '<span class="none">No tags yet</span>'}
+       <button class="tchip add" data-act="tagEdit">${tags.length ? '✎ Edit' : '+ Add tags'}</button></div>`;
+  const link = lib.url ? `<a class="btn ghost small compact" href="${esc(lib.url)}" target="_blank" rel="noopener">Open recipe ↗</a>`
+    : `<button class="btn ghost small compact" data-act="showRecipe" data-id="${lib.id}">View ingredients & steps</button>`;
+  return back + `<div class="detail">
+    <span class="badge b-${esc(lib.status)}">${esc(lib.status)}</span>${lib.recipe_type === 'snack/baking' ? ' <span class="badge b-snack">Snack/baking</span>' : ''}
+    <h1 class="dtitle">${esc(lib.title)}</h1>
+    <div class="meta"><span>⏱ ${esc(lib.total_time || '?')}</span><span>Serves ${lib.servings || '?'}</span><span>${lastCooked(lib.last_cooked)}</span></div>
+    ${lib.description ? `<p class="desc" style="font-size:15px">${esc(lib.description)}</p>` : ''}
+    <div style="margin:12px 0 4px">${link}</div>
+    <h3 class="dsec">Tags</h3>${tagSection}
+    <h3 class="dsec">Notes${notes.length ? ` <small>(${notes.length})</small>` : ''}</h3>
+    <form id="noteForm" class="noteform"><textarea class="field" name="body" rows="3" maxlength="2000" placeholder="Add a note — tweaks, what the kids thought, what to change next time…" aria-label="New note">${esc(S.noteDraft[dt.id] || '')}</textarea>
+      <div class="noteform-foot"><span class="hint" style="margin:0;font-size:13px">Posting as <b>${esc(S.who)}</b></span><button class="btn small compact" type="submit">Add note</button></div></form>
+    ${dt.loading && !dt.r ? '<p class="hint">Loading notes…</p>' : notes.length ? `<ul class="notes">${notes.map(n => `<li class="note">
+        <div class="note-head"><b>${esc(n.added_by || 'Someone')}</b><span>${fmtNoteTime(n.created_at)}</span>
+          <button class="note-x" data-act="delNote" data-id="${n.id}" aria-label="Delete note">✕</button></div>
+        <div class="note-body">${esc(n.body)}</div></li>`).join('')}</ul>` : '<p class="hint">No notes yet.</p>'}
+    <div class="danger-zone"><button class="btn danger" data-act="deleteRecipe" data-id="${lib.id}">🗑 Delete recipe</button>
+      <p class="hint" style="font-size:13px;margin-top:6px">Removes it from the library and from weeks still being picked. Weeks already sent keep their history.</p></div>
+  </div>`;
+}
+function confirmSheet({ title, body, ok, danger }) {
+  return new Promise(resolve => {
+    const bg = document.createElement('div'); bg.className = 'sheet-bg';
+    bg.innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><h2 style="margin-top:0">${title}</h2><p class="hint" style="font-size:16px">${body}</p>
+      <button class="btn ${danger ? 'danger' : ''}" data-r="1">${ok}</button><button class="btn ghost" data-r="0">Cancel</button></div>`;
+    bg.onclick = e => { const r = e.target.dataset.r; if (e.target !== bg && r == null) return; bg.remove(); resolve(r === '1'); };
+    document.body.appendChild(bg);
+  });
 }
 
 /* ---------- events ---------- */
@@ -441,7 +529,7 @@ document.addEventListener('click', async ev => {
   if (ev.target.closest('a[target=_blank]')) return;
   const el = ev.target.closest('[data-act],[data-tab],[data-step]'); if (!el || el.disabled) return;
   const d = S.data, w = d && d.week, id = +el.dataset.id;
-  if (el.dataset.tab) { ev.preventDefault(); S.tab = el.dataset.tab; render.force = true; render(); window.scrollTo(0, 0); return; }
+  if (el.dataset.tab) { ev.preventDefault(); S.tab = el.dataset.tab; S.detail = null; render.force = true; render(); window.scrollTo(0, 0); return; }
   const act = el.dataset.act;
   if (!act && el.dataset.step != null) { S.step = +el.dataset.step; render.force = true; render(); window.scrollTo(0, 0); return; }
   const opt = () => d.options.find(o => o.recipe_id === id), item = () => allItems().find(i => i.id === id);
@@ -474,8 +562,21 @@ document.addEventListener('click', async ev => {
         if (sent) { notifyAssistant('send_to_cart', { week_id: w.id }); toast('🛒 Sent! The cart gets filled next.'); } }
       break;
     case 'reopen': mutate('set_week_status', { p_week: w.id, p_status: 'pantry', p_who: S.who }, () => { w.status = 'pantry'; }); break;
-    case 'verdict': { const r = d.recipes.find(x => x.id === id), v = el.dataset.v;
-      mutate('recipe_verdict', { p_recipe: id, p_verdict: v, p_who: S.who }, () => { r.verdict = v; r.verdict_by = S.who; }); toast(v === 'keep' ? '👍 Keeping it' : '🔄 Marked to swap out'); break; }
+    case 'ftag': { const k = el.dataset.key; S[k] = S[k].includes(id) ? S[k].filter(x => x !== id) : [...S[k], id]; render.force = true; render(); break; }
+    case 'fclear': S[el.dataset.key] = []; render.force = true; render(); break;
+    case 'openRecipe': openRecipe(id); break;
+    case 'closeRecipe': S.detail = null; render.force = true; render(); window.scrollTo(0, 0); break;
+    case 'tagEdit': S.detail.tagEdit = !S.detail.tagEdit; render.force = true; render(); break;
+    case 'toggleTag': { const r = d.recipes.find(x => x.id === S.detail.id); const on = !(r.tags || []).includes(id);
+      mutate('set_recipe_tag', { p_recipe: r.id, p_tag: id, p_on: on, p_who: S.who }, () => { r.tags = on ? [...(r.tags || []), id] : r.tags.filter(x => x !== id); render.force = true; }); break; }
+    case 'delNote': if (await confirmSheet({ title: 'Delete this note?', body: 'It will be removed for everyone.', ok: 'Delete note', danger: true })) {
+      const rid = S.detail.id; await mutate('delete_recipe_note', { p_note: id }, () => { S.detail.r.notes = S.detail.r.notes.filter(n => n.id !== id); const r = d.recipes.find(x => x.id === rid); if (r) r.note_count = Math.max(0, (r.note_count || 1) - 1); render.force = true; });
+      openRecipe(rid, true); } break;
+    case 'deleteRecipe': { const r = d.recipes.find(x => x.id === id);
+      if (!(await confirmSheet({ title: `Delete “${esc(r.title)}”?`, body: 'It disappears from the library, from this week\'s options (if it hasn\'t been sent yet) and from future suggestions. Notes and tags go with it.', ok: 'Delete recipe', danger: true }))) break;
+      let ok = false;
+      await mutate('delete_recipe', { p_recipe: id, p_who: S.who }, () => { d.recipes = d.recipes.filter(x => x.id !== id); if (!locked()) d.options = (d.options || []).filter(o => o.recipe_id !== id); S.detail = null; render.force = true; }, () => { ok = true; });
+      if (ok) toast('🗑 Deleted ' + r.title); window.scrollTo(0, 0); break; }
     case 'menu': showMenu(); break;
     case 'addRecipe': openAddSheet(); break;
     case 'quickStart': { let qid = null; S.busy++; S.seq++;
@@ -518,6 +619,22 @@ document.addEventListener('submit', async ev => {
     document.activeElement && document.activeElement.blur();
     await mutate('add_item', { p_week: f.id === 'addFormQuick' ? S.data.quick.id : S.data.week.id, p_name: name, p_qty: fd.get('qty'), p_category: fd.get('category'), p_who: S.who });
     toast('Added ' + name); render.force = true; render();
+  } else if (f.id === 'noteForm') {
+    ev.preventDefault();
+    const body = new FormData(f).get('body').trim(); if (!body) return;
+    document.activeElement && document.activeElement.blur();
+    const rid = S.detail.id; let ok = false;
+    await mutate('add_recipe_note', { p_recipe: rid, p_body: body, p_who: S.who }, null, () => { ok = true; });
+    if (ok) { f.reset(); delete S.noteDraft[rid]; toast('📝 Note added'); await openRecipe(rid, true); }
+  } else if (f.id === 'newTagForm') {
+    ev.preventDefault();
+    const name = new FormData(f).get('tag').trim().replace(/\s+/g, ' '); if (!name) return;
+    document.activeElement && document.activeElement.blur();
+    const rid = S.detail.id; let tid = null;
+    S.busy++; S.seq++;
+    try { tid = await rpc('create_tag', { p_name: name, p_who: S.who }); await rpc('set_recipe_tag', { p_recipe: rid, p_tag: tid, p_on: true, p_who: S.who }); toast('🏷️ Tagged ' + name); }
+    catch (e) { handleErr(e); } finally { S.busy--; }
+    await refresh(true); render.force = true; render();
   } else if (f.id === 'urlForm') {
     ev.preventDefault();
     const url = new FormData(f).get('url').trim(), rtype = new FormData(f).get('rtype') || 'dinner';
@@ -666,3 +783,5 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) refr
 window.addEventListener('focus', () => refresh());
 render();
 if (S.code && S.who) refresh(true);
+
+document.addEventListener('input', ev => { if (ev.target.closest('#noteForm') && S.detail) S.noteDraft[S.detail.id] = ev.target.value; });

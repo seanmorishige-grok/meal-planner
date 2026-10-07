@@ -190,3 +190,38 @@ label.chip{cursor:pointer;display:inline-flex;align-items:center}
 .cart-missing summary{font-weight:700;cursor:pointer}
 .cart-missing ul{margin:6px 0 0;padding-left:20px}
 .cart-missing li{margin:2px 0}
+
+/* recipe tags, detail page, notes */
+.rcard-open{display:block;width:100%;text-align:left;background:none;padding:0;color:inherit;cursor:pointer}
+.chev{color:var(--muted);font-weight:400;margin-left:2px}
+.tagpills{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.tagpill{font-size:12px;font-weight:600;color:var(--accent-dark);background:var(--accent-soft);border-radius:999px;padding:3px 10px}
+.tagbar{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 10px;margin:0 -2px 6px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.tagbar::-webkit-scrollbar{display:none}
+.fchip{flex:none;min-height:38px;padding:7px 14px;border-radius:999px;border:1.5px solid var(--line);background:var(--card);font-size:14px;font-weight:600;color:var(--ink);white-space:nowrap}
+.fchip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.fchip.clear{color:var(--muted);border-style:dashed}
+.backlink{font-size:16px;font-weight:600;color:var(--accent-dark);padding:10px 0;min-height:44px;margin:0 0 4px}
+.detail{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px 16px 20px}
+.dtitle{font-size:24px;line-height:1.2;margin:8px 0 6px}
+.dsec{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:22px 0 10px;font-weight:700}
+.dsec small{font-weight:600;text-transform:none;letter-spacing:0}
+.tchip{min-height:38px;padding:7px 14px;border-radius:999px;border:1.5px solid var(--line);background:var(--card);font-size:14px;font-weight:600;color:var(--ink)}
+.tchip.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-dark)}
+.tchip.static{cursor:default}
+.tchip.add{border-style:dashed;color:var(--accent-dark)}
+.tagedit{margin-bottom:10px}
+.inline-form{display:flex;gap:8px;align-items:center;margin:4px 0}
+.inline-form .field{flex:1;margin:0;min-height:44px}
+.btn.compact{width:auto;min-height:44px;padding:0 16px;font-size:15px;display:inline-flex;align-items:center;justify-content:center}
+.noteform .field{width:100%;box-sizing:border-box;resize:vertical;min-height:84px;font:inherit;margin:0}
+.noteform-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:8px}
+.notes{list-style:none;padding:0;margin:14px 0 0;display:flex;flex-direction:column;gap:10px}
+.note{background:var(--bg);border-radius:14px;padding:10px 12px}
+.note-head{display:flex;align-items:baseline;gap:8px;font-size:14px}
+.note-head span{color:var(--muted);font-size:13px}
+.note-x{margin-left:auto;color:var(--muted);font-size:14px;width:32px;height:32px;border-radius:50%}
+.note-body{white-space:pre-wrap;font-size:15px;line-height:1.45;margin-top:2px}
+.danger-zone{margin-top:28px;padding-top:16px;border-top:1px solid var(--line)}
+.btn.danger{background:#b4412c;color:#fff;box-shadow:none}
+.btn.ghost.danger{background:var(--card);color:#b4412c}
