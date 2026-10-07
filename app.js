@@ -422,6 +422,7 @@ function tagFilterBar(key, ids) {
   const tags = sortedTags(ids); if (!tags.length) return '';
   S[key] = S[key].filter(id => ids.includes(id));
   const sel = S[key];
+  tags.sort((a, b) => sel.includes(b.id) - sel.includes(a.id));   // selected chips first so they're never scrolled out of view
   return `<div class="tagbar" role="group" aria-label="Filter by tag">${tags.map(t => `<button class="fchip ${sel.includes(t.id) ? 'on' : ''}" data-act="ftag" data-key="${key}" data-id="${t.id}" aria-pressed="${sel.includes(t.id)}">${sel.includes(t.id) ? '✓ ' : ''}${esc(t.name)}</button>`).join('')}
     ${sel.length ? `<button class="fchip clear" data-act="fclear" data-key="${key}">Clear</button>` : ''}</div>
     ${sel.length > 1 ? `<p class="hint" style="margin:-4px 0 12px;font-size:13px">Showing recipes with <b>all</b> of: ${sel.map(id => esc(tagName(id))).join(' + ')}</p>` : ''}`;
