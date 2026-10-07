@@ -1,4 +1,4 @@
-/* Family Meals — shared weekly meal planner. Vanilla JS, talks to Supabase RPCs only. */
+/* Shige Meal Planning — shared weekly meal planner. Vanilla JS, talks to Supabase RPCs only. */
 const SUPABASE_URL = 'https://lpppmjnryqtwhdsnhzpx.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxwcHBtam5yeXF0d2hkc25oenB4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEyMjczMjksImV4cCI6MjEwNjgwMzMyOX0.BYQpNOpwE98_4J7ICCgDYcIzlIzwm13je9dgpWnx5KU'; // public anon key: it can only call passcode-checked RPCs
 const POLL_MS = 5000;
@@ -140,7 +140,7 @@ function header(title, sub, actions = '') {
 function loginView() {
   const names = ['Sean'];
   return `<div class="login">
-    <h1>Family Meals</h1><p>Plan the week together.</p>
+    <h1>Shige Meal Planning</h1><p>Plan the week together.</p>
     <form id="loginForm" autocomplete="off">
       <label for="code">Household passcode</label>
       <input id="code" class="field" type="text" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="word-word-00" value="${esc(S.code)}" required>
