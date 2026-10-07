@@ -12,6 +12,7 @@ const S = {
   code: localStorage.getItem('mp_code') || '',
   who: localStorage.getItem('mp_who') || '',
   data: null, tab: 'week', step: null, open: {}, batches: {}, busy: 0, seq: 0, lastSync: null, error: null,
+  q: '', seg: 'all' /* all | dinner | snack */, sort: localStorage.getItem('mp_sort') || 'cooked' /* cooked | newest | az */, editTime: false,
   noteDraft: {}, tagFilter: [] /* Recipes tab tag filter (AND) */, pickTags: [] /* Pick step tag filter */, detail: null /* {id, r, loading} recipe detail page */,
   mode: null /* 'plan' | 'shop' on This week */, sel: null /* meal picked up for scheduling: {w, r} */, drag: null,
 };
@@ -284,19 +285,16 @@ function pickView() {
   const moreBtn = locked() ? '' : more > 0
     ? `<button class="btn ghost" data-act="more" style="margin:6px 0 4px">➕ More recipes <small style="font-weight:500;opacity:.75">(${Math.min(6, more)} more from the library)</small></button>`
     : `<div class="empty" style="padding:18px 8px"><p>That's all for now — add a recipe link in the <a href="#" data-tab="recipes">Recipes tab</a>.</p></div>`;
-  const shown = opts.filter(o => o.picked || hasTags(o.tags, S.pickTags));
-  const usedTags = new Set(opts.flatMap(o => o.tags || []));
   return `<h2>Pick this week's meals</h2><p class="hint">${msg}${pickedNames ? `<br><b style="color:var(--accent-dark)">✓ ${pickedNames}</b>` : ''}</p>`
-    + tagFilterBar('pickTags', [...usedTags])
-    + (shown.length ? '' : `<div class="empty" style="padding:14px 8px"><p>No options match those tags.</p></div>`)
-    + shown.map(o => {
+    + opts.map(o => {
     const open = S.open[o.recipe_id] ?? false;
     const factor = o.servings / (o.base_servings || 6);
     return `<div class="card ${o.picked ? 'picked' : ''}">
       <button class="card-main" data-act="pick" data-id="${o.recipe_id}" ${locked() ? 'disabled' : ''} aria-pressed="${o.picked}">
         <div class="check">${o.picked ? '✓' : ''}</div>
         <div><div class="card-title">${esc(o.title)}</div>
-          <div class="meta"><span>⏱ ${esc(o.total_time || '?')}</span><span>Serves ${o.base_servings || '?'} as written</span><span>${lastCooked(o.last_cooked)}</span></div>
+          <div class="meta">${timeMeta(o.total_time, o.total_minutes)}<span>Serves ${o.base_servings || '?'} as written</span><span>${lastCooked(o.last_cooked)}</span></div>
+          ${inAWhile(o.last_cooked) ? `<div class="awhile">Haven't had in a while</div>` : ''}
           ${tagPills(o.tags)}
           ${o.description ? `<div class="desc">${esc(o.description)}</div>` : ''}</div>
       </button>
@@ -374,7 +372,7 @@ function staplesView() {
   const other = items.filter(i => !recurring.includes(i));
   if (!items.length && weekStatus() === 'picking') return `<div class="empty"><div class="e">🥛</div><p>Confirm portions on the <b>Pick</b> step first — then the usual staples show up here.</p></div>`;
   const cats = CAT_ORDER.map(c => `<option value="${c}">${(CAT_LABEL[c] || c).replace(/^\S+\s/, '')}</option>`).join('');
-  return `<h2>Staples & extras</h2><p class="hint">Your usual QFC items. Tap to buy or skip, adjust amounts, or add anything else.</p>
+  return `<div class="h2row"><h2>Staples & extras</h2>${clearAllBtn(S.data.week && S.data.week.id, items)}</div><p class="hint">Your usual QFC items. Tap to buy or skip, adjust amounts, or add anything else.</p>
     ${locked() ? '' : `<form id="addForm" class="list" style="padding:14px"><b>➕ Add an item</b>
       <div class="addform"><input class="field" name="name" placeholder="e.g. paper towels" required>
       <input class="field" name="qty" placeholder="qty" style="text-align:center">
@@ -423,7 +421,7 @@ function quickView() {
     (fromRecipes.length ? `<div class="group" style="font-size:15px;color:var(--ink)">From snacks & baking${added ? ` <small style="text-transform:none;letter-spacing:0;font-weight:500;color:var(--muted)">(${added})</small>` : ''}</div>
       <p class="hint" style="margin:4px 0 0">Tap <b>Have it</b> for anything already in the kitchen.</p>${itemRows(fromRecipes, 'pantry')}` : '') + removedFooter(allRecipe) +
     `<div style="margin-top:18px">${addItemForm('addFormQuick')}</div>
-     <div class="group" style="font-size:15px;color:var(--ink)">Staples</div>${itemRows(staples, 'staple')}
+     <div class="group grouprow" style="font-size:15px;color:var(--ink)"><span>Staples</span>${clearAllBtn(q.id, staples)}</div>${itemRows(staples, 'staple')}
      <div style="text-align:center;margin-top:16px"><button class="linkbtn" data-act="quickDiscard" style="color:var(--muted);font-weight:500">🗑 Discard this quick order</button></div>`;
 }
 function quickActionBar() {
@@ -449,45 +447,83 @@ function tagFilterBar(key, ids) {
 }
 function lastCooked(d) { return `Last cooked: ${d ? fmtDate(d) : 'Never'}`; }
 
+/* ---------- recipe list: search · segment · sort ---------- */
+function minutesOf(t) { if (!t) return null; t = t.toLowerCase(); const h = t.match(/(\d+)\s*(?:h|hr|hrs|hour|hours)\b/), m = t.match(/(\d+)\s*(?:m|min|mins|minute|minutes)\b/);
+  const n = (h ? +h[1] * 60 : 0) + (m ? +m[1] : 0); return n || null; }
+function timeMeta(t, mins) {
+  const m = mins ?? minutesOf(t);
+  return `<span>⏱ ${esc(t || '—')}</span>${m >= 90 ? '<span class="flag">⏳ Long cook</span>' : ''}`;
+}
+function inAWhile(d) { return d && d <= addDays(todayISO(), -28); }
+const SORTS = { cooked: 'Least recently cooked', newest: 'Newest', az: 'A–Z' };
+function recipeMatches(r, q) {
+  if (!q) return true;
+  const hay = [r.title, r.ing_text || '', ...(r.tags || []).map(tagName)].join(' ¦ ').toLowerCase();
+  return q.toLowerCase().split(/\s+/).filter(Boolean).every(w => hay.includes(w));   // every word must match somewhere
+}
+function sortRecipes(list) {
+  const az = (a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' });
+  if (S.sort === 'az') return list.sort(az);
+  if (S.sort === 'newest') return list.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '') || az(a, b));
+  return list.sort((a, b) => (a.last_cooked ? 1 : 0) - (b.last_cooked ? 1 : 0) || (a.last_cooked || '').localeCompare(b.last_cooked || '') || az(a, b));
+}
 function snackCard(r) {
   const b = S.batches[r.id] || 1;
   return `<div class="rcard"><button class="rcard-open" data-act="openRecipe" data-id="${r.id}" aria-label="Open ${esc(r.title)}">
-    <span class="badge b-${esc(r.status)}">${esc(r.status)}</span> <span class="badge b-snack">Snack/baking</span>
-    <div class="card-title" style="margin-top:6px">${esc(r.title)} <span class="chev">›</span></div>
-    <div class="meta"><span>⏱ ${esc(r.total_time || '?')}</span><span>Makes ${r.servings || '?'} per batch</span>${r.note_count ? `<span>📝 ${r.note_count}</span>` : ''}</div>
-    ${tagPills(r.tags)}</button>
-    <div class="serv"><div class="serv-label">Batches</div>
-      <div class="stepper"><button data-act="batch" data-id="${r.id}" data-d="-1" aria-label="fewer batches">−</button><span>${b}</span><button data-act="batch" data-id="${r.id}" data-d="1" aria-label="more batches">+</button></div></div>
-    <button class="btn small" data-act="snackAdd" data-id="${r.id}" ${(r.ingredients || []).length ? '' : 'disabled'}>🛒 Add ingredients to order</button></div>`;
+    <div class="rc-top"><div class="card-title">${esc(r.title)}</div><span class="chev">›</span></div>
+    <div class="meta">${timeMeta(r.total_time, r.total_minutes)}<span>Makes ${r.servings || '?'} per batch</span><span>${lastCooked(r.last_cooked)}</span>${r.note_count ? `<span>📝 ${r.note_count}</span>` : ''}</div>
+    <div class="pills"><span class="pill kind">Snack & baking</span>${r.status === 'trial' ? '<span class="pill trial">New</span>' : ''}${sortedTags(r.tags).map(t => `<span class="pill">${esc(t.name)}</span>`).join('')}</div></button>
+    <div class="snackrow"><div class="stepper sm" aria-label="Batches"><button data-act="batch" data-id="${r.id}" data-d="-1" aria-label="fewer batches">−</button><span>${b}×</span><button data-act="batch" data-id="${r.id}" data-d="1" aria-label="more batches">+</button></div>
+      <button class="btn small compact" data-act="snackAdd" data-id="${r.id}" ${(r.ingredients || []).length ? '' : 'disabled'}>🛒 Add ingredients to order</button></div></div>`;
 }
 function recipeCard(r) {
   return `<div class="rcard"><button class="rcard-open" data-act="openRecipe" data-id="${r.id}" aria-label="Open ${esc(r.title)}">
-    <span class="badge b-${esc(r.status)}">${esc(r.status)}</span>
-    <div class="card-title" style="margin-top:6px">${esc(r.title)} <span class="chev">›</span></div>
-    <div class="meta"><span>⏱ ${esc(r.total_time || '?')}</span><span>Serves ${r.servings || '?'}</span><span>${lastCooked(r.last_cooked)}</span>${r.note_count ? `<span>📝 ${r.note_count} note${r.note_count > 1 ? 's' : ''}</span>` : ''}</div>
-    ${tagPills(r.tags)}</button></div>`;
+    <div class="rc-top"><div class="card-title">${esc(r.title)}</div><span class="chev">›</span></div>
+    <div class="meta">${timeMeta(r.total_time, r.total_minutes)}<span>Serves ${r.servings || '?'}</span><span>${lastCooked(r.last_cooked)}</span>${r.note_count ? `<span>📝 ${r.note_count}</span>` : ''}</div>
+    ${r.status === 'trial' || (r.tags || []).length ? `<div class="pills">${r.status === 'trial' ? '<span class="pill trial">New</span>' : ''}${sortedTags(r.tags).map(t => `<span class="pill">${esc(t.name)}</span>`).join('')}</div>` : ''}</button></div>`;
+}
+function pendingCard(r) {
+  return r.photo_count ? `<div class="rcard pending"><div class="pills"><span class="pill trial">📷 Processing…</span></div>
+      <div class="card-title" style="margin-top:6px">${esc(r.title)}</div>
+      <div class="meta">${r.photo_count} photo${r.photo_count > 1 ? 's' : ''} · added by ${esc(r.added_by || '?')} — the assistant will type it up.</div></div>`
+    : `<div class="rcard pending"><div class="pills"><span class="pill trial">Importing soon</span></div>
+      <div class="card-title" style="margin-top:6px;word-break:break-all;font-size:15px">${esc(r.url)}</div>
+      <div class="meta">Added by ${esc(r.added_by || '?')} — ingredients get filled in by the assistant.${r.notes ? ' ' + esc(r.notes) : ''}</div></div>`;
+}
+function recipeListHtml() {
+  const all = (S.data.recipes || []).filter(r => r.status !== 'retired');
+  const inSeg = r => S.seg === 'all' || (S.seg === 'snack' ? r.recipe_type === 'snack/baking' : r.recipe_type !== 'snack/baking');
+  const pending = S.q ? [] : all.filter(r => r.status === 'pending' && inSeg(r));
+  const lib = sortRecipes(all.filter(r => r.status !== 'pending' && inSeg(r) && recipeMatches(r, S.q)));
+  const cards = lib.map(r => swipeWrap(r.recipe_type === 'snack/baking' ? snackCard(r) : recipeCard(r), { act: 'delRecipeSwipe', id: r.id, label: 'Delete', full: false, cls: 'sw-card' })).join('');
+  const count = `<div class="rcount">${lib.length} recipe${lib.length === 1 ? '' : 's'}${S.q ? ` matching “${esc(S.q)}”` : ''} · ${SORTS[S.sort]}</div>`;
+  const empty = !lib.length ? `<div class="empty"><div class="e">🔍</div><p>${S.q ? `No recipes match “${esc(S.q)}”.` : 'Nothing here yet.'}</p></div>` : '';
+  return pending.map(pendingCard).join('') + (lib.length ? count : '') + cards + empty;
 }
 function recipesView() {
   if (S.detail) return recipeDetailView();
-  const all = S.data.recipes || [];
-  const lib = all.filter(r => r.status !== 'pending');
-  const bar = tagFilterBar('tagFilter', [...new Set(lib.flatMap(r => r.tags || []))]);
-  const match = r => r.status === 'pending' ? !S.tagFilter.length : hasTags(r.tags, S.tagFilter);
-  const snacks = all.filter(r => r.recipe_type === 'snack/baking' && r.status !== 'pending' && r.status !== 'retired' && match(r));
-  const rs = all.filter(r => !(r.recipe_type === 'snack/baking' && r.status !== 'pending' && r.status !== 'retired') && match(r));
-  const none = !snacks.length && !rs.length ? `<div class="empty"><div class="e">🏷️</div><p>No recipes have all of those tags.</p></div>` : '';
-  return header('Recipes', `${lib.length} in the library`) + `
-    <button class="btn" data-act="addRecipe" style="margin:0 0 14px">➕ Add recipe</button>` + bar + none +
-    (snacks.length ? `<div class="group" style="font-size:15px;color:var(--ink);margin-top:4px">🧁 Snacks & Baking</div>${snacks.map(r => swipeWrap(snackCard(r), { act: 'delRecipeSwipe', id: r.id, label: 'Delete', full: false, cls: 'sw-card' })).join('')}
-      ${rs.length ? `<div class="group" style="font-size:15px;color:var(--ink);margin-top:22px">🍽️ Dinners</div>` : ''}` : '') +
-    rs.map(r => r.status === 'pending' && r.photo_count ? `<div class="rcard"><span class="badge b-pending">📷 Processing…</span>
-        <div class="card-title" style="margin-top:6px">${esc(r.title)}</div>
-        <div class="meta">${r.photo_count} photo${r.photo_count > 1 ? 's' : ''} · added by ${esc(r.added_by || '?')} — the assistant will type it up and add it to the library.</div></div>`
-      : r.status === 'pending' ? `<div class="rcard"><span class="badge b-pending">Importing soon</span>
-        <div class="card-title" style="margin-top:6px;word-break:break-all;font-size:15px">${esc(r.url)}</div>
-        <div class="meta">Added by ${esc(r.added_by || '?')} — ingredients get filled in by the assistant.${r.notes ? ' ' + esc(r.notes) : ''}</div></div>`
-      : swipeWrap(recipeCard(r), { act: 'delRecipeSwipe', id: r.id, label: 'Delete', full: false, cls: 'sw-card' })).join('');
+  const n = (S.data.recipes || []).filter(r => r.status !== 'pending').length;
+  const seg = [['all', 'All'], ['dinner', 'Dinners'], ['snack', 'Snacks & Baking']];
+  return `<div class="top"><div><h1>Recipes</h1><div class="sub">${n} in the library</div></div>
+      <div class="top-actions"><button class="iconbtn add" data-act="addRecipe" aria-label="Add recipe">＋</button><button class="who" data-act="menu">👋 ${esc(S.who)}</button></div></div>
+    <div class="searchrow"><label class="search"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.75" fill="none" stroke="currentColor" stroke-width="2"/><path d="M13 13l4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <input id="rsearch" type="search" inputmode="search" enterkeyhint="search" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Search recipes, ingredients, tags" value="${esc(S.q)}" aria-label="Search recipes">
+        <button class="sclear ${S.q ? 'on' : ''}" data-act="qclear" aria-label="Clear search" type="button">✕</button></label>
+      <button class="iconbtn sortbtn" data-act="sortMenu" aria-label="Sort: ${SORTS[S.sort]}"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 4v12M6 16l-3-3M6 16l3-3M14 16V4M14 4l-3 3M14 4l3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+    <div class="seg3" role="tablist">${seg.map(([k, l]) => `<button role="tab" aria-selected="${S.seg === k}" class="${S.seg === k ? 'on' : ''}" data-act="seg" data-seg="${k}">${l}</button>`).join('')}</div>
+    <div id="rlist">${recipeListHtml()}</div>`;
 }
+function updateRecipeList() { const el = $('#rlist'); if (el) el.innerHTML = recipeListHtml(); const c = $('.sclear'); if (c) c.classList.toggle('on', !!S.q); }
+function sortMenu() {
+  const bg = document.createElement('div'); bg.className = 'sheet-bg';
+  bg.innerHTML = `<div class="sheet actions" role="dialog" aria-label="Sort recipes"><div class="sheet-title">Sort by</div>
+    ${Object.entries(SORTS).map(([k, l]) => `<button class="action ${S.sort === k ? 'on' : ''}" data-sort="${k}"><span>${l}</span>${S.sort === k ? '<b>✓</b>' : ''}</button>`).join('')}
+    <button class="action cancel" data-sort="">Cancel</button></div>`;
+  bg.onclick = e => { const b = e.target.closest('[data-sort]'); if (e.target !== bg && !b) return; if (b && b.dataset.sort) { S.sort = b.dataset.sort; localStorage.setItem('mp_sort', S.sort); } bg.remove(); render.force = true; render(); };
+  document.body.appendChild(bg);
+}
+document.addEventListener('input', ev => { if (ev.target.id === 'rsearch') { S.q = ev.target.value; updateRecipeList(); } });
+document.addEventListener('keydown', ev => { if (ev.target.id === 'rsearch' && ev.key === 'Enter') ev.target.blur(); });
 
 /* ---------- recipe detail page (tags, notes, delete) ---------- */
 function fmtNoteTime(ts) {
@@ -520,7 +556,9 @@ function recipeDetailView() {
   return back + `<div class="detail">
     <span class="badge b-${esc(lib.status)}">${esc(lib.status)}</span>${lib.recipe_type === 'snack/baking' ? ' <span class="badge b-snack">Snack/baking</span>' : ''}
     <h1 class="dtitle">${esc(lib.title)}</h1>
-    <div class="meta"><span>⏱ ${esc(lib.total_time || '?')}</span><span>Serves ${lib.servings || '?'}</span><span>${lastCooked(lib.last_cooked)}</span></div>
+    ${dt.editTime ? `<form id="timeForm" class="inline-form timeform"><input class="field" name="t" value="${esc(lib.total_time || '')}" placeholder="e.g. 35 min or 1 hr 20 min" aria-label="Total time" autocomplete="off">
+        <button class="btn small compact" type="submit">Save</button><button class="linkbtn" type="button" data-act="cancelTime">Cancel</button></form>` : ''}
+    <div class="meta">${dt.editTime ? '' : `<button class="timeedit" data-act="editTime" aria-label="Edit total time">⏱ ${esc(lib.total_time || 'Add time')} <span>✎</span></button>${minutesOf(lib.total_time) >= 90 ? '<span class="flag">⏳ Long cook</span>' : ''}`}<span>Serves ${lib.servings || '?'}</span><span>${lastCooked(lib.last_cooked)}</span></div>
     ${lib.description ? `<p class="desc" style="font-size:15px">${esc(lib.description)}</p>` : ''}
     <div style="margin:12px 0 4px">${link}</div>
     <h3 class="dsec">Tags</h3>${tagSection}
@@ -586,6 +624,11 @@ document.addEventListener('click', async ev => {
     case 'ftag': { const k = el.dataset.key; S[k] = S[k].includes(id) ? S[k].filter(x => x !== id) : [...S[k], id]; render.force = true; render(); break; }
     case 'fclear': S[el.dataset.key] = []; render.force = true; render(); break;
     case 'openRecipe': openRecipe(id); break;
+    case 'seg': S.seg = el.dataset.seg; render.force = true; render(); break;
+    case 'qclear': S.q = ''; updateRecipeList(); { const i = $('#rsearch'); if (i) { i.value = ''; i.focus(); } } break;
+    case 'sortMenu': sortMenu(); break;
+    case 'editTime': S.detail.editTime = true; render.force = true; render(); setTimeout(() => { const i = $('#timeForm input'); if (i) { i.focus(); i.select(); } }, 30); break;
+    case 'cancelTime': S.detail.editTime = false; render.force = true; render(); break;
     case 'closeRecipe': S.detail = null; render.force = true; render(); window.scrollTo(0, 0); break;
     case 'tagEdit': S.detail.tagEdit = !S.detail.tagEdit; render.force = true; render(); break;
     case 'toggleTag': { const r = d.recipes.find(x => x.id === S.detail.id); const on = !(r.tags || []).includes(id);
@@ -613,6 +656,7 @@ document.addEventListener('click', async ev => {
       break; }
     case 'startOver': startOver(); break;
     case 'showRecipe': showRecipe(id); break;
+    case 'clearStaples': clearStaples(id); break;
     case 'swipeDo': swipeAction(el.dataset.swipeAct, id, el); break;
     case 'restoreItems': { const ids = el.dataset.ids.split(',').map(Number);
       S.busy++; S.seq++; try { for (const x of ids) await rpc('set_item', { p_item: x, p_have_it: null, p_include: true, p_qty: null }); toast('Put back ✓'); } catch (e) { handleErr(e); } finally { S.busy--; }
@@ -638,6 +682,15 @@ document.addEventListener('submit', async ev => {
     document.activeElement && document.activeElement.blur();
     await mutate('add_item', { p_week: f.id === 'addFormQuick' ? S.data.quick.id : S.data.week.id, p_name: name, p_qty: fd.get('qty'), p_category: fd.get('category'), p_who: S.who });
     toast('Added ' + name); render.force = true; render();
+  } else if (f.id === 'timeForm') {
+    ev.preventDefault();
+    const t = new FormData(f).get('t').trim(); if (!t) return;
+    document.activeElement && document.activeElement.blur();
+    const rid = S.detail.id, r = S.data.recipes.find(x => x.id === rid);
+    S.busy++; S.seq++;
+    try { const saved = await rpc('set_recipe_time', { p_recipe: rid, p_time: t }); if (r) { r.total_time = saved; r.total_minutes = minutesOf(saved); } S.detail.editTime = false; toast('⏱ Time saved: ' + saved); }
+    catch (e) { handleErr(e); } finally { S.busy--; }
+    render.force = true; render(); refresh(true);
   } else if (f.id === 'noteForm') {
     ev.preventDefault();
     const body = new FormData(f).get('body').trim(); if (!body) return;
@@ -804,6 +857,19 @@ render();
 if (S.code && S.who) refresh(true);
 
 document.addEventListener('input', ev => { if (ev.target.closest('#noteForm') && S.detail) S.noteDraft[S.detail.id] = ev.target.value; });
+
+// "Clear all" on the Staples step / Quick order staples: every staple and custom item → Skip, with Undo (no confirm)
+function clearAllBtn(orderId, items) {
+  const on = (items || []).filter(i => i.source !== 'recipe' && i.include).length;
+  return !locked() && orderId && on ? `<button class="hdrbtn" data-act="clearStaples" data-id="${orderId}">Clear all</button>` : '';
+}
+function clearStaples(orderId) {
+  const isQuick = S.data.quick && S.data.quick.id === orderId;
+  const list = d => isQuick ? ((d.quick && d.quick.id === orderId && d.quick.items) || []) : (d.week && d.week.id === orderId ? d.items || [] : []);
+  const n = list(S.data).filter(i => i.source !== 'recipe' && i.include).length;
+  deferAction(`Cleared ${n} staple${n === 1 ? '' : 's'}`, d => list(d).forEach(i => { if (i.source !== 'recipe') i.include = false; }),
+    () => rpc('clear_staples', { p_week: orderId }));
+}
 
 /* ---------- undoable actions: hidden right away, committed after 5 s unless Undo is tapped ---------- */
 const UNDO_MS = 5000;
