@@ -16,10 +16,12 @@ const S = {
   mode: null /* 'plan' | 'shop' on This week */, sel: null /* meal picked up for scheduling: {w, r} */, drag: null,
 };
 
+const SW = { el: null, open: null, x0: 0, y0: 0, base: 0, tx: 0, axis: null, suppress: false };   // swipe state (see bottom)
+
 /* ---------- api ---------- */
 async function rpc(fn, args = {}) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
-    method: 'POST',
+    method: 'POST', keepalive: true,
     headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ p_code: S.code, ...args }),
   });
@@ -52,6 +54,7 @@ async function refresh(force) {
     const d = await rpc('get_state');
     if (mySeq !== S.seq && !force) return; // a newer change happened while we were fetching
     S.data = d; S.lastSync = new Date(); S.error = null;
+    if (S.pend) S.pend.apply(S.data);
   } catch (e) {
     if (e.code === '28P01') return logout('Wrong passcode.');
     S.error = 'Offline — retrying…';
@@ -92,7 +95,7 @@ function render() {
   // don't clobber a field the user is typing in
   const ae = document.activeElement;
   if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT' || ae.tagName === 'TEXTAREA') && app.contains(ae) && S.data && !render.force) return;
-  if (S.drag && S.data && !render.force) return; // don't rebuild the page mid-drag
+  if ((S.drag || SW.el || SW.open) && S.data && !render.force) return; // don't rebuild the page mid-drag / mid-swipe
   render.force = false;
   if (!S.code || !S.who) { app.innerHTML = loginView(); return bindLogin(); }
   if (!S.data) { app.innerHTML = '<div class="boot">🥕</div>'; return; }
@@ -223,7 +226,7 @@ function planSection(p) {
       ${tray.length ? tray.map(m => mealChip(p, m)).join('') : `<div class="none">${p.meals.length ? 'Every meal has a day ✓' : 'No meals were picked for this week.'}</div>`}</div>
     <div class="days">${days.map(d => `<div class="day drop ${d === t ? 'today' : ''} ${picking ? 'target' : ''}" data-act="dropDay" data-week="${p.week_id}" data-date="${d}">
       <div class="dayhead"><b>${dayName(d)}</b><small>${fmtDate(d)}${d === t ? ' · today' : ''}</small></div>
-      <div class="daymeals">${on(d).map(m => mealChip(p, m)).join('') || `<span class="none">${picking ? 'Tap to put it here' : '—'}</span>`}</div></div>`).join('')}</div></section>`;
+      <div class="daymeals">${on(d).map(m => swipeWrap(mealChip(p, m), { act: 'unschedule', id: m.recipe_id, label: 'Unschedule', extra: `data-week="${p.week_id}"`, cls: 'sw-meal' })).join('') || `<span class="none">${picking ? 'Tap to put it here' : '—'}</span>`}</div></div>`).join('')}</div></section>`;
 }
 function planView() {
   const ps = plans();
@@ -318,8 +321,21 @@ function nameHtml(i, kind) {
   const src = srcLabel(i, kind);
   return `<b>${esc(i.name)}${src ? ` <span class="src">(${esc(src)})</span>` : ''}</b>`;
 }
+// swipe-left action for an item row: custom items are deleted; recipe/staple items on the pantry check and the list are removed (include = false)
+function itemSwipe(i, kind) {
+  if (locked()) return null;
+  if (i.source === 'custom') return { act: 'delItem', label: 'Delete' };
+  if (kind === 'pantry' || kind === 'list') return { act: 'skipItem', label: 'Remove' };
+  return null;
+}
 function itemRows(items, kind) {
   return groupBy(items).map(([cat, list]) => `<div class="group">${CAT_LABEL[cat] || esc(cat)}</div><div class="list">${list.map(i => {
+    const sw = itemSwipe(i, kind), row = itemRow(i, kind);
+    return sw ? swipeWrap(row, { act: sw.act, id: i.id, label: sw.label }) : row;
+  }).join('')}</div>`).join('');
+}
+function itemRow(i, kind) {
+  {
     if (kind === 'pantry') return `<div class="row ${i.have_it ? 'dim' : ''}"><div class="name">${nameHtml(i, kind)}<small>${esc(i.qty || '')}</small></div>
       <button class="toggle ${i.have_it ? 'on' : ''}" data-act="have" data-id="${i.id}" aria-pressed="${i.have_it}" ${locked() ? 'disabled' : ''}>${i.have_it ? '✓ Have it' : 'Have it?'}</button></div>`;
     if (kind === 'staple') return `<div class="row ${i.include ? '' : 'dim'}"><div class="name">${nameHtml(i, kind)}<small>${i.source === 'custom' ? '' : esc(stapleProduct(i))}</small></div>
@@ -327,7 +343,11 @@ function itemRows(items, kind) {
       ${i.source === 'custom' && !locked() ? `<button class="x" data-act="rm" data-id="${i.id}" aria-label="remove">✕</button>` : ''}
       <button class="toggle add ${i.include ? 'on' : ''}" data-act="inc" data-id="${i.id}" aria-pressed="${i.include}" ${locked() ? 'disabled' : ''}>${i.include ? '✓ Buy' : 'Skip'}</button></div>`;
     return `<div class="row"><div class="name">${nameHtml(i, kind)}</div><span class="qty">${esc(i.qty || '')}</span></div>`;
-  }).join('')}</div>`).join('');
+  }
+}
+function removedFooter(items) {
+  const n = items.filter(i => !i.include).length;
+  return n && !locked() ? `<div class="restore"><span>${n} item${n > 1 ? 's' : ''} removed</span><button class="linkbtn" data-act="restoreItems" data-ids="${items.filter(i => !i.include).map(i => i.id).join(',')}">Put back</button></div>` : '';
 }
 function stapleProduct(i) {
   if (i.source === 'custom') return 'added by ' + (i.added_by || '');
@@ -335,10 +355,10 @@ function stapleProduct(i) {
   return s ? s.product : '';
 }
 function pantryView() {
-  const items = (S.data.items || []).filter(i => i.source === 'recipe');
-  if (!items.length) return `<div class="empty"><div class="e">🧺</div><p>Pick meals and tap <b>Confirm portions</b> first.</p></div>`;
+  const all = (S.data.items || []).filter(i => i.source === 'recipe'), items = all.filter(i => i.include);
+  if (!all.length) return `<div class="empty"><div class="e">🧺</div><p>Pick meals and tap <b>Confirm portions</b> first.</p></div>`;
   const need = items.filter(i => !i.have_it).length;
-  return `<h2>Pantry check</h2><p class="hint">Tap <b>Have it</b> for anything already in the kitchen. ${need} of ${items.length} to buy.</p>` + itemRows(items, 'pantry');
+  return `<h2>Pantry check</h2><p class="hint">Tap <b>Have it</b> for anything already in the kitchen. ${need} of ${items.length} to buy.</p>` + itemRows(items, 'pantry') + removedFooter(all);
 }
 function addItemForm(id) {
   const cats = CAT_ORDER.map(c => `<option value="${c}">${(CAT_LABEL[c] || c).replace(/^\S+\s/, '')}</option>`).join('');
@@ -392,7 +412,7 @@ function quickView() {
   if (!q) return header('Quick order') + intro + `<div class="empty"><div class="e">🛒</div><p>Need a few groceries now?</p></div>
     <button class="btn" data-act="quickStart">Start a quick order</button>`;
   const items = q.items || [];
-  const fromRecipes = items.filter(i => i.source === 'recipe'), staples = items.filter(i => i.source !== 'recipe');
+  const allRecipe = items.filter(i => i.source === 'recipe'), fromRecipes = allRecipe.filter(i => i.include), staples = items.filter(i => i.source !== 'recipe');
   const buy = items.filter(i => i.include && !i.have_it);
   const added = (q.quick_recipes || []).map(r => `${esc(r.title)} ×${+r.batches}`).join(' · ');
   if (q.status === 'ready_for_cart') return header('Quick order', 'Sent to cart') +
@@ -401,7 +421,7 @@ function quickView() {
      <button class="btn ghost" data-act="quickStart" style="margin-top:18px">Start another quick order</button>`;
   return header('Quick order', `${buy.length} item${buy.length === 1 ? '' : 's'} to buy`) + intro +
     (fromRecipes.length ? `<div class="group" style="font-size:15px;color:var(--ink)">From snacks & baking${added ? ` <small style="text-transform:none;letter-spacing:0;font-weight:500;color:var(--muted)">(${added})</small>` : ''}</div>
-      <p class="hint" style="margin:4px 0 0">Tap <b>Have it</b> for anything already in the kitchen.</p>${itemRows(fromRecipes, 'pantry')}` : '') +
+      <p class="hint" style="margin:4px 0 0">Tap <b>Have it</b> for anything already in the kitchen.</p>${itemRows(fromRecipes, 'pantry')}` : '') + removedFooter(allRecipe) +
     `<div style="margin-top:18px">${addItemForm('addFormQuick')}</div>
      <div class="group" style="font-size:15px;color:var(--ink)">Staples</div>${itemRows(staples, 'staple')}
      <div style="text-align:center;margin-top:16px"><button class="linkbtn" data-act="quickDiscard" style="color:var(--muted);font-weight:500">🗑 Discard this quick order</button></div>`;
@@ -458,7 +478,7 @@ function recipesView() {
   const none = !snacks.length && !rs.length ? `<div class="empty"><div class="e">🏷️</div><p>No recipes have all of those tags.</p></div>` : '';
   return header('Recipes', `${lib.length} in the library`) + `
     <button class="btn" data-act="addRecipe" style="margin:0 0 14px">➕ Add recipe</button>` + bar + none +
-    (snacks.length ? `<div class="group" style="font-size:15px;color:var(--ink);margin-top:4px">🧁 Snacks & Baking</div>${snacks.map(snackCard).join('')}
+    (snacks.length ? `<div class="group" style="font-size:15px;color:var(--ink);margin-top:4px">🧁 Snacks & Baking</div>${snacks.map(r => swipeWrap(snackCard(r), { act: 'delRecipeSwipe', id: r.id, label: 'Delete', full: false, cls: 'sw-card' })).join('')}
       ${rs.length ? `<div class="group" style="font-size:15px;color:var(--ink);margin-top:22px">🍽️ Dinners</div>` : ''}` : '') +
     rs.map(r => r.status === 'pending' && r.photo_count ? `<div class="rcard"><span class="badge b-pending">📷 Processing…</span>
         <div class="card-title" style="margin-top:6px">${esc(r.title)}</div>
@@ -466,7 +486,7 @@ function recipesView() {
       : r.status === 'pending' ? `<div class="rcard"><span class="badge b-pending">Importing soon</span>
         <div class="card-title" style="margin-top:6px;word-break:break-all;font-size:15px">${esc(r.url)}</div>
         <div class="meta">Added by ${esc(r.added_by || '?')} — ingredients get filled in by the assistant.${r.notes ? ' ' + esc(r.notes) : ''}</div></div>`
-      : recipeCard(r)).join('');
+      : swipeWrap(recipeCard(r), { act: 'delRecipeSwipe', id: r.id, label: 'Delete', full: false, cls: 'sw-card' })).join('');
 }
 
 /* ---------- recipe detail page (tags, notes, delete) ---------- */
@@ -507,10 +527,10 @@ function recipeDetailView() {
     <h3 class="dsec">Notes${notes.length ? ` <small>(${notes.length})</small>` : ''}</h3>
     <form id="noteForm" class="noteform"><textarea class="field" name="body" rows="3" maxlength="2000" placeholder="Add a note — tweaks, what the kids thought, what to change next time…" aria-label="New note">${esc(S.noteDraft[dt.id] || '')}</textarea>
       <div class="noteform-foot"><span class="hint" style="margin:0;font-size:13px">Posting as <b>${esc(S.who)}</b></span><button class="btn small compact" type="submit">Add note</button></div></form>
-    ${dt.loading && !dt.r ? '<p class="hint">Loading notes…</p>' : notes.length ? `<ul class="notes">${notes.map(n => `<li class="note">
+    ${dt.loading && !dt.r ? '<p class="hint">Loading notes…</p>' : notes.length ? `<ul class="notes">${notes.map(n => `<li>${swipeWrap(`<div class="note">
         <div class="note-head"><b>${esc(n.added_by || 'Someone')}</b><span>${fmtNoteTime(n.created_at)}</span>
           <button class="note-x" data-act="delNote" data-id="${n.id}" aria-label="Delete note">✕</button></div>
-        <div class="note-body">${esc(n.body)}</div></li>`).join('')}</ul>` : '<p class="hint">No notes yet.</p>'}
+        <div class="note-body">${esc(n.body)}</div></div>`, { act: 'delNoteSwipe', id: n.id, label: 'Delete', cls: 'sw-note' })}</li>`).join('')}</ul>` : '<p class="hint">No notes yet.</p>'}
     <div class="danger-zone"><button class="btn danger" data-act="deleteRecipe" data-id="${lib.id}">🗑 Delete recipe</button>
       <p class="hint" style="font-size:13px;margin-top:6px">Removes it from the library and from weeks still being picked. Weeks already sent keep their history.</p></div>
   </div>`;
@@ -570,14 +590,8 @@ document.addEventListener('click', async ev => {
     case 'tagEdit': S.detail.tagEdit = !S.detail.tagEdit; render.force = true; render(); break;
     case 'toggleTag': { const r = d.recipes.find(x => x.id === S.detail.id); const on = !(r.tags || []).includes(id);
       mutate('set_recipe_tag', { p_recipe: r.id, p_tag: id, p_on: on, p_who: S.who }, () => { r.tags = on ? [...(r.tags || []), id] : r.tags.filter(x => x !== id); render.force = true; }); break; }
-    case 'delNote': if (await confirmSheet({ title: 'Delete this note?', body: 'It will be removed for everyone.', ok: 'Delete note', danger: true })) {
-      const rid = S.detail.id; await mutate('delete_recipe_note', { p_note: id }, () => { S.detail.r.notes = S.detail.r.notes.filter(n => n.id !== id); const r = d.recipes.find(x => x.id === rid); if (r) r.note_count = Math.max(0, (r.note_count || 1) - 1); render.force = true; });
-      openRecipe(rid, true); } break;
-    case 'deleteRecipe': { const r = d.recipes.find(x => x.id === id);
-      if (!(await confirmSheet({ title: `Delete “${esc(r.title)}”?`, body: 'It disappears from the library, from this week\'s options (if it hasn\'t been sent yet) and from future suggestions. Notes and tags go with it.', ok: 'Delete recipe', danger: true }))) break;
-      let ok = false;
-      await mutate('delete_recipe', { p_recipe: id, p_who: S.who }, () => { d.recipes = d.recipes.filter(x => x.id !== id); if (!locked()) d.options = (d.options || []).filter(o => o.recipe_id !== id); S.detail = null; render.force = true; }, () => { ok = true; });
-      if (ok) toast('🗑 Deleted ' + r.title); window.scrollTo(0, 0); break; }
+    case 'delNote': swipeAction('delNoteSwipe', id); break;
+    case 'deleteRecipe': swipeAction('delRecipeSwipe', id); break;
     case 'menu': showMenu(); break;
     case 'addRecipe': openAddSheet(); break;
     case 'quickStart': { let qid = null; S.busy++; S.seq++;
@@ -599,6 +613,10 @@ document.addEventListener('click', async ev => {
       break; }
     case 'startOver': startOver(); break;
     case 'showRecipe': showRecipe(id); break;
+    case 'swipeDo': swipeAction(el.dataset.swipeAct, id, el); break;
+    case 'restoreItems': { const ids = el.dataset.ids.split(',').map(Number);
+      S.busy++; S.seq++; try { for (const x of ids) await rpc('set_item', { p_item: x, p_have_it: null, p_include: true, p_qty: null }); toast('Put back ✓'); } catch (e) { handleErr(e); } finally { S.busy--; }
+      await refresh(true); break; }
     case 'mode': S.mode = el.dataset.mode; S.sel = null; render.force = true; render(); window.scrollTo(0, 0); break;
     case 'selMeal': { const w2 = +el.dataset.week; S.sel = S.sel && S.sel.w === w2 && S.sel.r === id ? null : { w: w2, r: id }; render.force = true; render(); break; }
     case 'dropDay': if (S.sel && S.sel.w === +el.dataset.week) setPlanDay(S.sel.w, S.sel.r, el.dataset.date); break;
@@ -786,3 +804,186 @@ render();
 if (S.code && S.who) refresh(true);
 
 document.addEventListener('input', ev => { if (ev.target.closest('#noteForm') && S.detail) S.noteDraft[S.detail.id] = ev.target.value; });
+
+/* ---------- undoable actions: hidden right away, committed after 5 s unless Undo is tapped ---------- */
+const UNDO_MS = 5000;
+function deferAction(label, apply, commit) {
+  flushPending();
+  S.pend = { label, apply, commit };
+  apply(S.data); render.force = true; render();
+  showUndo(label);
+  S.pend.timer = setTimeout(flushPending, UNDO_MS);
+}
+async function flushPending() {
+  const p = S.pend; if (!p) return;
+  S.pend = null; clearTimeout(p.timer); hideUndo();
+  S.busy++; S.seq++;
+  try { await p.commit(); } catch (e) { handleErr(e); } finally { S.busy--; }
+  await refresh(true);
+  if (p.after) p.after();
+}
+function undoPending() {
+  const p = S.pend; if (!p) return;
+  S.pend = null; clearTimeout(p.timer); hideUndo(); toast('Undone');
+  if (p.undo) p.undo();
+  refresh(true).then(() => { render.force = true; render(); });
+}
+function showUndo(label) {
+  let u = $('#undo');
+  if (!u) { u = document.createElement('div'); u.id = 'undo'; u.setAttribute('role', 'status'); document.body.appendChild(u);
+    u.addEventListener('click', e => { if (e.target.closest('button')) undoPending(); }); }
+  u.innerHTML = `<span>${esc(label)}</span><button type="button">Undo</button><i style="animation-duration:${UNDO_MS}ms"></i>`;
+  u.classList.toggle('high', !!document.querySelector('.actionbar'));
+  u.classList.remove('show'); void u.offsetWidth; u.classList.add('show');
+}
+function hideUndo() { const u = $('#undo'); if (u) u.classList.remove('show'); }
+// closing or backgrounding the app commits right away (rpc uses keepalive)
+window.addEventListener('pagehide', flushPending);
+document.addEventListener('visibilitychange', () => { if (document.hidden) flushPending(); });
+
+function findItem(d, id) { return [...(d.items || []), ...((d.quick && d.quick.items) || [])].find(i => i.id === id); }
+function dropItem(d, id) { d.items = (d.items || []).filter(i => i.id !== id); if (d.quick) d.quick.items = (d.quick.items || []).filter(i => i.id !== id); }
+async function swipeAction(act, id, el) {
+  closeSwipe(SW.open, true);
+  const d = S.data;
+  if (act === 'skipItem') { const i = findItem(d, id); if (!i) return;
+    deferAction(`Removed ${i.name}`, dd => { const x = findItem(dd, id); if (x) x.include = false; },
+      () => rpc('set_item', { p_item: id, p_have_it: null, p_include: false, p_qty: null })); }
+  else if (act === 'delItem') { const i = findItem(d, id); if (!i) return;
+    deferAction(`Deleted ${i.name}`, dd => dropItem(dd, id), () => rpc('remove_item', { p_item: id })); }
+  else if (act === 'unschedule') { const w = +((el && el.dataset.week) || (S.sel && S.sel.w) || 0);
+    const p = plans().find(x => x.week_id === w), m = p && p.meals.find(x => x.recipe_id === id); if (!m) return;
+    deferAction(`${m.title} moved to Not scheduled`, dd => { const pp = (dd.plans || []).find(x => x.week_id === w), mm = pp && pp.meals.find(x => x.recipe_id === id); if (mm) mm.planned_date = null; },
+      () => rpc('set_plan_day', { p_week: w, p_recipe: id, p_date: null, p_who: S.who })); }
+  else if (act === 'delNoteSwipe') { const rid = S.detail && S.detail.id; if (!rid) return;
+    const hide = () => { if (S.detail && S.detail.r && S.detail.id === rid) S.detail.r.notes = (S.detail.r.notes || []).filter(n => n.id !== id); };
+    deferAction('Note deleted', dd => { hide(); const r = (dd.recipes || []).find(x => x.id === rid); if (r) { r.note_count = Math.max(0, (r.note_count || 1) - 1); } },
+      () => rpc('delete_recipe_note', { p_note: id }));
+    S.pend.after = () => { if (S.detail && S.detail.id === rid) openRecipe(rid, true); };
+    S.pend.undo = () => { if (S.detail && S.detail.id === rid) openRecipe(rid, true); }; }
+  else if (act === 'delRecipeSwipe') { const r = (d.recipes || []).find(x => x.id === id); if (!r) return;
+    if (!(await confirmSheet({ title: `Delete “${esc(r.title)}”?`, body: 'It disappears from the library, from this week\'s options (if it hasn\'t been sent yet) and from future suggestions. You can undo for a few seconds.', ok: 'Delete recipe', danger: true }))) return;
+    const wasDetail = S.detail && S.detail.id === id;
+    deferAction(`Deleted ${r.title}`, dd => { dd.recipes = (dd.recipes || []).filter(x => x.id !== id);
+        if (!['ready_for_cart', 'carted'].includes(dd.week && dd.week.status)) dd.options = (dd.options || []).filter(o => o.recipe_id !== id);
+        if (S.detail && S.detail.id === id) S.detail = null; },
+      () => rpc('delete_recipe', { p_recipe: id, p_who: S.who }));
+    S.pend.undo = () => { if (wasDetail) openRecipe(id); };
+    if (wasDetail) window.scrollTo(0, 0); }
+}
+
+/* ---------- swipe left on rows (touch only; mouse keeps click/drag) ---------- */
+const EDGE = 20, BTN_W = 96;
+const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+function swipeWrap(inner, { act, id, label, full = true, cls = '', extra = '' }) {
+  return `<div class="swipe ${cls}" data-swipe="${act}" data-id="${id}" data-full="${full ? 1 : 0}" ${extra}>
+    <div class="swipe-under" aria-hidden="true"><button class="swipe-btn" tabindex="-1" data-act="swipeDo" data-swipe-act="${act}" data-id="${id}" ${extra}>${label}</button></div>
+    <div class="swipe-row">${inner}</div></div>`;
+}
+function setTx(sw, x, animate) {
+  const row = sw.querySelector('.swipe-row'); if (!row) return;
+  row.style.transition = animate && !reduced() ? 'transform .22s cubic-bezier(.2,.8,.2,1)' : 'none';
+  row.style.transform = x ? `translate3d(${x}px,0,0)` : '';
+  sw.classList.toggle('revealed', x < 0);
+  sw.style.setProperty('--sx', Math.min(1, -x / BTN_W));
+}
+function closeSwipe(sw, quiet) {
+  if (!sw) return; setTx(sw, 0, true); if (SW.open === sw) SW.open = null;
+  if (!quiet) setTimeout(() => { if (!SW.open && !SW.el) { render.force = true; render(); } }, 260);
+}
+document.addEventListener('pointerdown', e => {
+  SW.suppress = false;
+  if (e.pointerType === 'mouse') return;
+  if (SW.open && !SW.open.contains(e.target)) { closeSwipe(SW.open); SW.suppress = true; return; }  // tap elsewhere just closes
+  const sw = e.target.closest('.swipe');
+  if (!sw || e.clientX < EDGE || e.target.closest('input,textarea,select,.swipe-under')) return;   // left edge = Safari back gesture
+  SW.el = sw; SW.x0 = e.clientX; SW.y0 = e.clientY; SW.axis = null; SW.base = sw === SW.open ? -BTN_W : 0; SW.tx = SW.base;
+}, true);
+document.addEventListener('pointermove', e => {
+  if (!SW.el || e.pointerType === 'mouse') return;
+  const dx = e.clientX - SW.x0, dy = e.clientY - SW.y0;
+  if (!SW.axis) { if (Math.hypot(dx, dy) < 8) return; SW.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'; if (SW.axis === 'y') { SW.el = null; return; } }
+  const w = SW.el.offsetWidth, full = SW.el.dataset.full === '1';
+  let x = SW.base + dx;
+  if (x > 0) x = x / 4;                                         // resist swiping right
+  const max = full ? -w : -BTN_W;
+  if (x < max) x = max + (x - max) / 4;                          // rubber band past the end
+  SW.tx = x; setTx(SW.el, x, false);
+  SW.el.classList.toggle('commit', full && x < -w * 0.55);
+}, true);
+function endSwipe(e, cancelled) {
+  const sw = SW.el; if (!sw) return; SW.el = null;
+  if (SW.axis !== 'x') return;
+  SW.suppress = true; setTimeout(() => { SW.suppress = false; }, 450);   // a swipe isn't a tap
+  const w = sw.offsetWidth, full = sw.dataset.full === '1';
+  sw.classList.remove('commit');
+  if (!cancelled && full && SW.tx < -w * 0.55) {                 // full swipe commits
+    setTx(sw, -w, true); SW.open = null;
+    setTimeout(() => swipeAction(sw.dataset.swipe, +sw.dataset.id, sw), reduced() ? 0 : 200);
+  } else if (!cancelled && SW.tx < -BTN_W / 2) {                 // partial: leave the red button showing
+    if (SW.open && SW.open !== sw) closeSwipe(SW.open, true);
+    setTx(sw, -BTN_W, true); SW.open = sw;
+    const b = sw.querySelector('.swipe-btn'); if (b) b.tabIndex = 0;
+  } else closeSwipe(sw);
+}
+document.addEventListener('pointerup', e => endSwipe(e, false), true);
+document.addEventListener('pointercancel', e => { if (SW.el && SW.axis === 'x') endSwipe(e, false); else SW.el = null; }, true);
+// swallow the click that follows a swipe or a tap-to-close
+document.addEventListener('click', e => { if (SW.suppress) { SW.suppress = false; if (!e.target.closest('.swipe-under')) { e.stopPropagation(); e.preventDefault(); } } }, true);
+// tapping an open row's own content closes it
+document.addEventListener('click', e => { const sw = e.target.closest('.swipe'); if (SW.open && sw === SW.open && !e.target.closest('.swipe-under')) { e.stopPropagation(); e.preventDefault(); closeSwipe(sw); } }, true);
+
+/* ---------- pull to refresh: re-fetch data + check for a new app version ---------- */
+const PTR = { y0: null, x0: 0, pull: 0, axis: null, busy: false, TH: 70 };
+function ptrEl() {
+  let el = $('#ptr');
+  if (!el) { el = document.createElement('div'); el.id = 'ptr'; el.setAttribute('aria-hidden', 'true');
+    el.innerHTML = `<div class="ptr-spin">${Array.from({ length: 8 }, (_, i) => `<i style="transform:rotate(${i * 45}deg)"></i>`).join('')}</div>`; document.body.appendChild(el); }
+  return el;
+}
+function ptrShow(pull, state) {
+  const el = ptrEl(), wrap = $('.wrap'), p = Math.min(pull, 120);
+  el.className = state || '';
+  el.style.transform = `translate(-50%, ${Math.max(-50, p - 50)}px)`;
+  el.style.opacity = Math.min(1, p / PTR.TH);
+  el.style.setProperty('--ptr-p', Math.min(1, p / PTR.TH));
+  if (wrap && !reduced()) { wrap.style.transition = state === 'release' ? 'transform .25s ease' : 'none'; wrap.style.transform = p ? `translateY(${p}px)` : ''; }
+}
+function sheetOpen() { return !!document.querySelector('.sheet-bg'); }
+document.addEventListener('touchstart', e => {
+  if (PTR.busy || e.touches.length !== 1 || window.scrollY > 0 || sheetOpen() || SW.open) { PTR.y0 = null; return; }
+  PTR.y0 = e.touches[0].clientY; PTR.x0 = e.touches[0].clientX; PTR.axis = null; PTR.pull = 0;
+}, { passive: true });
+document.addEventListener('touchmove', e => {
+  if (PTR.y0 == null) return;
+  const dy = e.touches[0].clientY - PTR.y0, dx = e.touches[0].clientX - PTR.x0;
+  if (!PTR.axis) { if (Math.hypot(dx, dy) < 8) return; PTR.axis = dy > 0 && Math.abs(dy) > Math.abs(dx) && window.scrollY <= 0 ? 'pull' : 'none'; }
+  if (PTR.axis !== 'pull') { PTR.y0 = null; return; }
+  e.preventDefault();                                            // we own this gesture (stops Safari's overscroll)
+  PTR.pull = dy < 0 ? 0 : 1.2 * Math.pow(dy, 0.85);              // iOS-style resistance
+  ptrShow(PTR.pull, PTR.pull >= PTR.TH ? 'armed' : '');
+}, { passive: false });
+document.addEventListener('touchend', () => {
+  if (PTR.y0 == null || PTR.axis !== 'pull') { PTR.y0 = null; return; }
+  PTR.y0 = null;
+  if (PTR.pull >= PTR.TH) pullRefresh(); else ptrShow(0, 'release');
+}, { passive: true });
+async function pullRefresh() {
+  PTR.busy = true; ptrShow(PTR.TH, 'spinning release');
+  const t0 = Date.now();
+  await flushPending();
+  const [, newer] = await Promise.all([refresh(true), checkVersion()]);
+  await new Promise(r => setTimeout(r, Math.max(0, 600 - (Date.now() - t0))));   // let the spinner register
+  if (newer) { toast('Updating the app…'); location.replace(location.pathname + '?v=' + newer + '&t=' + Date.now()); return; }
+  ptrShow(0, 'release'); PTR.busy = false;
+  if (S.detail) openRecipe(S.detail.id, true);
+}
+// compare the app.js?v=N on the live page with the one this page loaded (no service worker; GitHub Pages + cache-bust)
+function loadedVersion() { const s = document.querySelector('script[src*="app.js"]'); const m = s && s.getAttribute('src').match(/[?&]v=(\d+)/); return m ? m[1] : null; }
+async function checkVersion() {
+  try {
+    const txt = await (await fetch(location.pathname + '?vcheck=' + Date.now(), { cache: 'no-store' })).text();
+    const m = txt.match(/app\.js\?v=(\d+)/), cur = loadedVersion();
+    return m && cur && m[1] !== cur ? m[1] : null;
+  } catch (e) { return null; }
+}

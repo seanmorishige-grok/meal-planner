@@ -225,3 +225,49 @@ label.chip{cursor:pointer;display:inline-flex;align-items:center}
 .danger-zone{margin-top:28px;padding-top:16px;border-top:1px solid var(--line)}
 .btn.danger{background:#b4412c;color:#fff;box-shadow:none}
 .btn.ghost.danger{background:var(--card);color:#b4412c}
+
+/* pull to refresh + swipe rows + undo */
+html,body{overscroll-behavior-y:none}
+#ptr{position:fixed;left:50%;top:calc(var(--safe-t) + 6px);z-index:60;width:34px;height:34px;border-radius:50%;background:var(--card);box-shadow:var(--shadow);
+  transform:translate(-50%,-50px);opacity:0;pointer-events:none;display:grid;place-items:center}
+#ptr.release{transition:transform .25s ease,opacity .25s ease}
+.ptr-spin{position:relative;width:20px;height:20px;transform:rotate(calc(var(--ptr-p,0) * 270deg))}
+.ptr-spin i{position:absolute;left:9px;top:0;width:2.4px;height:6px;border-radius:2px;background:var(--muted);transform-origin:1.2px 10px}
+.ptr-spin i:nth-child(1){opacity:1}.ptr-spin i:nth-child(2){opacity:.85}.ptr-spin i:nth-child(3){opacity:.72}.ptr-spin i:nth-child(4){opacity:.6}
+.ptr-spin i:nth-child(5){opacity:.48}.ptr-spin i:nth-child(6){opacity:.38}.ptr-spin i:nth-child(7){opacity:.3}.ptr-spin i:nth-child(8){opacity:.22}
+#ptr.armed .ptr-spin i{background:var(--ink)}
+#ptr.spinning .ptr-spin{animation:ptrspin .8s steps(8) infinite}
+@keyframes ptrspin{to{transform:rotate(360deg)}}
+
+.swipe{position:relative;overflow:hidden;touch-action:pan-y}
+.swipe-row{position:relative;z-index:1;background:var(--card);touch-action:pan-y;will-change:transform}
+.swipe-under{position:absolute;inset:0;display:flex;justify-content:flex-end;align-items:stretch;background:#d93a2b;visibility:hidden}
+.swipe.revealed .swipe-under{visibility:visible}
+.swipe-btn{min-width:96px;padding:0 14px;color:#fff;font-weight:700;font-size:15px;background:transparent;display:flex;align-items:center;justify-content:center}
+.swipe.commit .swipe-btn{min-width:100%;justify-content:flex-end;padding-right:26px}
+.swipe[data-swipe=unschedule] .swipe-under{background:#7d6f66}
+.sw-meal{border-radius:12px}.sw-meal .swipe-row{background:transparent}.sw-meal .swipe-row .meal{background:var(--bg)}
+.sw-note{border-radius:14px}.sw-note .swipe-row{background:var(--bg)}
+.sw-card{border-radius:var(--radius);margin:0 0 10px;box-shadow:var(--shadow)}
+.sw-card .swipe-row .rcard{margin:0;box-shadow:none}
+.sw-card .swipe-under{border-radius:var(--radius)}
+.restore{display:flex;justify-content:space-between;align-items:center;margin:10px 4px 0;color:var(--muted);font-size:14px}
+
+#undo{position:fixed;left:12px;right:12px;bottom:calc(84px + var(--safe-b, 0px));z-index:70;display:flex;align-items:center;gap:12px;padding:12px 14px 14px 16px;
+  background:var(--ink);color:#fff;border-radius:14px;box-shadow:0 8px 24px rgba(0,0,0,.25);font-size:15px;overflow:hidden;
+  transform:translateY(160%);opacity:0;transition:transform .25s ease,opacity .25s ease,visibility .25s;max-width:520px;margin:0 auto}
+#undo{pointer-events:none;visibility:hidden}
+#undo.show{transform:none;opacity:1;pointer-events:auto;visibility:visible}
+#undo span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#undo button{color:#ffc59f;font-weight:700;font-size:16px;padding:6px 4px;min-height:36px}
+#undo i{position:absolute;left:0;bottom:0;height:3px;width:100%;background:#ffc59f;transform-origin:left}
+#undo.show i{animation:undobar linear forwards}
+@keyframes undobar{from{transform:scaleX(1)}to{transform:scaleX(0)}}
+
+@media (prefers-reduced-motion: reduce){
+  #ptr,#ptr.release,#undo,.swipe-row{transition:none !important}
+  #ptr.spinning .ptr-spin{animation:none}
+  #ptr.spinning::after{content:'';position:absolute;inset:-3px;border-radius:50%;border:2px solid var(--accent)}
+  #undo.show i{animation:none;display:none}
+}
+#undo.high{bottom:calc(150px + var(--safe-b, 0px))}
