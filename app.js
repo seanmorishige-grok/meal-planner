@@ -144,7 +144,7 @@ function header(title, sub, actions = '') {
 function loginView() {
   const names = ['Sean'];
   return `<div class="login">
-    <h1 class="brand">sous</h1><p>for the Morishiges</p>
+    <h1 class="wm" aria-label="sous">sous<i></i></h1><p class="tag">for the Morishiges</p>
     <form id="loginForm" autocomplete="off">
       <label for="code">Household passcode</label>
       <input id="code" class="field" type="text" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="word-word-00" value="${esc(S.code)}" required>
@@ -1254,16 +1254,18 @@ function timeline() {
 }
 function statusCard() {
   const c = basketCounts(), b = c.b, issue = cartIssue();
-  let head, tone = 'info';
-  if (!c.buy.length) { head = 'Nothing to order yet.'; tone = 'idle'; }
-  else if (b.status === 'ready_for_cart') head = `Not yet. The cart is being filled with ${c.unc} item${c.unc === 1 ? '' : 's'}.`;
-  else if (issue && issue.status !== 'filling') { head = 'Not yet. ' + (issue.message || 'QFC needs attention.'); tone = 'warn'; }
-  else if (c.unc) head = `Not yet. ${c.unc} item${c.unc === 1 ? ' isn’t' : 's aren’t'} in the cart.`;
-  else { head = 'Yes. Everything is in the QFC cart.'; tone = 'ok'; }
+  let head, sub = '', tone = 'idle', pill = 'Not yet';
+  const done = timeline().every(s => s.done);
+  if (done) { head = 'Dinner’s handled.'; sub = 'The order is in. Anything you add now goes to next week’s basket.'; tone = 'ok'; pill = 'All handled'; }
+  else if (!c.buy.length) { head = 'Nothing to order yet.'; sub = 'Pick a few dinners and the basket builds itself.'; }
+  else if (b.status === 'ready_for_cart') { head = 'We’re filling the cart.'; sub = `${c.unc} item${c.unc === 1 ? '' : 's'} on the way into QFC. Nothing needs you right now.`; tone = 'ok'; pill = 'Handled'; }
+  else if (issue && issue.status !== 'filling') { head = 'The cart needs a look.'; sub = issue.message || 'QFC needs attention.'; tone = 'warn'; pill = 'Needs a look'; }
+  else if (c.unc) { head = 'Not quite ready to order.'; sub = `${c.unc} item${c.unc === 1 ? ' isn’t' : 's aren’t'} in the cart yet.`; }
+  else { head = 'Ready to check out.'; sub = 'Everything is in the QFC cart.'; tone = 'ok'; pill = 'Ready'; }
   const steps = timeline(), next = steps.find(s => !s.done);
   const groups = groupCounts(c.carItems);
   return `<section class="status ${tone}" aria-label="Order status">
-    <div class="status-q">Can we order?</div><div class="status-a"><i class="sdot"></i>${esc(head)}</div>
+    <div class="status-pill"><i class="dot ${tone === 'ok' ? 'ok' : tone === 'warn' ? 'warn' : ''}"></i>${pill}</div><div class="status-a">${esc(head)}</div><div class="status-sub">${esc(sub)}</div>
     ${c.buy.length ? `<div class="status-grid">
       <div><div class="k">In the cart</div><div class="v num">${c.car}</div></div>
       <div><div class="k">Not yet</div><div class="v num">${c.unc}</div></div>
@@ -1275,7 +1277,7 @@ function homeView() {
   const steps = timeline(), cur = steps.findIndex(s => !s.done), done = steps.filter(s => s.done), w = S.data.week;
   const act = (S.data.activity || []).slice(0, 4);
   const curStep = steps[cur];
-  return header('This week', w ? 'Week of ' + fmtDate(w.week_start) : '') + presenceNote() + rhythmNote(steps) + statusCard()
+  return '<div class="wm sm" aria-label="sous">sous<i></i></div>' + header('This week', w ? 'Week of ' + fmtDate(w.week_start) : '') + presenceNote() + rhythmNote(steps) + statusCard()
     + (curStep ? `<section class="now" aria-label="Current step"><div class="now-k">Step ${cur + 1} of 4 · ${curStep.day}</div><h2>${curStep.title}</h2><p>${curStep.body}</p><div class="now-actions">${curStep.action}</div></section>`
       : `<section class="now done"><div class="now-k">All set</div><h2>Ordered</h2><p>This week’s groceries are on the way. Anything you add now goes to next week’s basket.</p><div class="now-actions"><button class="btn ghost" data-act="basketTab">Start next week’s basket</button></div></section>`)
     + `<ol class="steps-list">${steps.map((s, i) => i === cur ? '' : `<li class="${s.done ? 'done' : 'todo'}">${s.done ? IC.check : `<span class="n">${i + 1}</span>`}<span class="t">${s.title}</span><span class="d">${s.done ? s.doneText : s.day}</span></li>`).join('')}</ol>`
