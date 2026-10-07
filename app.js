@@ -522,7 +522,8 @@ function sortMenu() {
   bg.onclick = e => { const b = e.target.closest('[data-sort]'); if (e.target !== bg && !b) return; if (b && b.dataset.sort) { S.sort = b.dataset.sort; localStorage.setItem('mp_sort', S.sort); } bg.remove(); render.force = true; render(); };
   document.body.appendChild(bg);
 }
-document.addEventListener('input', ev => { if (ev.target.id === 'rsearch') { S.q = ev.target.value; updateRecipeList(); } });
+document.addEventListener('input', ev => { if (ev.target.id === 'rsearch') { S.q = ev.target.value; updateRecipeList(); }
+  if (ev.target.closest('#timeForm') && S.detail) S.detail.timeDraft = ev.target.value; });
 document.addEventListener('keydown', ev => { if (ev.target.id === 'rsearch' && ev.key === 'Enter') ev.target.blur(); });
 
 /* ---------- recipe detail page (tags, notes, delete) ---------- */
@@ -556,7 +557,7 @@ function recipeDetailView() {
   return back + `<div class="detail">
     <span class="badge b-${esc(lib.status)}">${esc(lib.status)}</span>${lib.recipe_type === 'snack/baking' ? ' <span class="badge b-snack">Snack/baking</span>' : ''}
     <h1 class="dtitle">${esc(lib.title)}</h1>
-    ${dt.editTime ? `<form id="timeForm" class="inline-form timeform"><input class="field" name="t" value="${esc(lib.total_time || '')}" placeholder="e.g. 35 min or 1 hr 20 min" aria-label="Total time" autocomplete="off">
+    ${dt.editTime ? `<form id="timeForm" class="inline-form timeform"><input class="field" name="t" value="${esc(dt.timeDraft ?? lib.total_time ?? '')}" placeholder="e.g. 35 min or 1 hr 20 min" aria-label="Total time" autocomplete="off">
         <button class="btn small compact" type="submit">Save</button><button class="linkbtn" type="button" data-act="cancelTime">Cancel</button></form>` : ''}
     <div class="meta">${dt.editTime ? '' : `<button class="timeedit" data-act="editTime" aria-label="Edit total time">⏱ ${esc(lib.total_time || 'Add time')} <span>✎</span></button>${minutesOf(lib.total_time) >= 90 ? '<span class="flag">⏳ Long cook</span>' : ''}`}<span>Serves ${lib.servings || '?'}</span><span>${lastCooked(lib.last_cooked)}</span></div>
     ${lib.description ? `<p class="desc" style="font-size:15px">${esc(lib.description)}</p>` : ''}
@@ -627,7 +628,7 @@ document.addEventListener('click', async ev => {
     case 'seg': S.seg = el.dataset.seg; render.force = true; render(); break;
     case 'qclear': S.q = ''; updateRecipeList(); { const i = $('#rsearch'); if (i) { i.value = ''; i.focus(); } } break;
     case 'sortMenu': sortMenu(); break;
-    case 'editTime': S.detail.editTime = true; render.force = true; render(); setTimeout(() => { const i = $('#timeForm input'); if (i) { i.focus(); i.select(); } }, 30); break;
+    case 'editTime': S.detail.editTime = true; S.detail.timeDraft = null; render.force = true; render(); setTimeout(() => { const i = $('#timeForm input'); if (i) { i.focus(); i.select(); } }, 30); break;
     case 'cancelTime': S.detail.editTime = false; render.force = true; render(); break;
     case 'closeRecipe': S.detail = null; render.force = true; render(); window.scrollTo(0, 0); break;
     case 'tagEdit': S.detail.tagEdit = !S.detail.tagEdit; render.force = true; render(); break;
@@ -688,7 +689,7 @@ document.addEventListener('submit', async ev => {
     document.activeElement && document.activeElement.blur();
     const rid = S.detail.id, r = S.data.recipes.find(x => x.id === rid);
     S.busy++; S.seq++;
-    try { const saved = await rpc('set_recipe_time', { p_recipe: rid, p_time: t }); if (r) { r.total_time = saved; r.total_minutes = minutesOf(saved); } S.detail.editTime = false; toast('⏱ Time saved: ' + saved); }
+    try { const saved = await rpc('set_recipe_time', { p_recipe: rid, p_time: t }); if (r) { r.total_time = saved; r.total_minutes = minutesOf(saved); } S.detail.editTime = false; S.detail.timeDraft = null; toast('⏱ Time saved: ' + saved); }
     catch (e) { handleErr(e); } finally { S.busy--; }
     render.force = true; render(); refresh(true);
   } else if (f.id === 'noteForm') {
