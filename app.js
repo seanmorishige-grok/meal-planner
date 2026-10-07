@@ -469,18 +469,18 @@ function sortRecipes(list) {
 }
 function snackCard(r) {
   const b = S.batches[r.id] || 1;
-  return `<div class="rcard"><button class="rcard-open" data-act="openRecipe" data-id="${r.id}" aria-label="Open ${esc(r.title)}">
+  return `<div class="rcard"><button class="rcard-open rc-row" data-act="openRecipe" data-id="${r.id}" aria-label="Open ${esc(r.title)}">${coverHtml(r, 'rthumb')}<div class="rc-body">
     <div class="rc-top"><div class="card-title">${esc(r.title)}</div><span class="chev">›</span></div>
     <div class="meta">${timeMeta(r.total_time, r.total_minutes)}<span>Makes ${r.servings || '?'} per batch</span><span>${lastCooked(r.last_cooked)}</span>${r.note_count ? `<span>📝 ${r.note_count}</span>` : ''}</div>
-    <div class="pills"><span class="pill kind">Snack & baking</span>${r.status === 'trial' ? '<span class="pill trial">New</span>' : ''}${sortedTags(r.tags).map(pillBtn).join('')}</div></button>
+    <div class="pills"><span class="pill kind">Snack & baking</span>${r.status === 'trial' ? '<span class="pill trial">New</span>' : ''}${sortedTags(r.tags).map(pillBtn).join('')}</div></div></button>
     <div class="snackrow"><div class="stepper sm" aria-label="Batches"><button data-act="batch" data-id="${r.id}" data-d="-1" aria-label="fewer batches">−</button><span>${b}×</span><button data-act="batch" data-id="${r.id}" data-d="1" aria-label="more batches">+</button></div>
       <button class="btn small compact" data-act="snackAdd" data-id="${r.id}" ${(r.ingredients || []).length ? '' : 'disabled'}>🛒 Add ingredients to order</button></div></div>`;
 }
 function recipeCard(r) {
-  return `<div class="rcard"><button class="rcard-open" data-act="openRecipe" data-id="${r.id}" aria-label="Open ${esc(r.title)}">
+  return `<div class="rcard"><button class="rcard-open rc-row" data-act="openRecipe" data-id="${r.id}" aria-label="Open ${esc(r.title)}">${coverHtml(r, 'rthumb')}<div class="rc-body">
     <div class="rc-top"><div class="card-title">${esc(r.title)}</div><span class="chev">›</span></div>
     <div class="meta">${timeMeta(r.total_time, r.total_minutes)}<span>Serves ${r.servings || '?'}</span><span>${lastCooked(r.last_cooked)}</span>${r.note_count ? `<span>📝 ${r.note_count}</span>` : ''}</div>
-    ${r.status === 'trial' || (r.tags || []).length ? `<div class="pills">${r.status === 'trial' ? '<span class="pill trial">New</span>' : ''}${sortedTags(r.tags).map(pillBtn).join('')}</div>` : ''}</button></div>`;
+    ${r.status === 'trial' || (r.tags || []).length ? `<div class="pills">${r.status === 'trial' ? '<span class="pill trial">New</span>' : ''}${sortedTags(r.tags).map(pillBtn).join('')}</div>` : ''}</div></button></div>`;
 }
 function pendingCard(r) {
   return r.photo_count ? `<div class="rcard pending"><div class="pills"><span class="pill trial">📷 Processing…</span></div>
@@ -516,10 +516,15 @@ function shelvesHtml() {
       <div class="shelf-head"><h3>${esc(x.title)} <small>${x.items.length}</small></h3>
         <button class="seeall" data-act="seeAll" data-f='${esc(JSON.stringify(x.f))}'>See all</button></div>
       <div class="shelf-row">${x.items.slice(0, 12).map(r => `<button class="scard" data-act="openRecipe" data-id="${r.id}">
-          <span class="scard-art" style="--h:${(r.id * 47) % 360}">${esc(recipeEmoji(r))}</span>
+          ${coverHtml(r, 'scard-art')}
           <span class="scard-title">${esc(r.title)}</span>
           <span class="scard-meta">${esc(r.total_time || '—')}${(r.total_minutes ?? minutesOf(r.total_time)) >= 90 ? ' · ⏳' : ''}</span></button>`).join('')}</div></section>`).join('')
     + `<div class="list-head">All recipes</div>`;
+}
+/* Cover photo with a fixed-ratio frame; the soft gradient + emoji sits underneath, so a missing or failed image never looks broken. */
+function coverHtml(r, cls, eager) {
+  const img = r.image_url ? `<img src="${esc(r.image_url)}" alt="" loading="${eager ? 'eager' : 'lazy'}" decoding="async" onload="this.classList.add('in')" onerror="this.remove()">` : '';
+  return `<span class="cover ${cls}${r.image_url ? '' : ' ph'}" style="--h:${(r.id * 47) % 360}" aria-hidden="true"><span class="cover-ph">${esc(recipeEmoji(r))}</span>${img}</span>`;
 }
 function recipeEmoji(r) {
   const title = r.title.toLowerCase(), t = title + ' ' + (r.ing_text || '').toLowerCase();
@@ -603,7 +608,9 @@ function recipeDetailView() {
        <button class="tchip add" data-act="tagEdit">${tags.length ? '✎ Edit' : '+ Add tags'}</button></div>`;
   const link = lib.url ? `<a class="btn ghost small compact" href="${esc(lib.url)}" target="_blank" rel="noopener">Open recipe ↗</a>`
     : `<button class="btn ghost small compact" data-act="showRecipe" data-id="${lib.id}">View ingredients & steps</button>`;
-  return back + `<div class="detail">
+  const hero = `<div class="dhero-wrap">${coverHtml(lib, 'dhero', true)}
+    <button class="photo-btn ${lib.image_url ? 'on-photo' : ''}" data-act="coverPick" data-id="${lib.id}" ${dt.coverBusy ? 'disabled' : ''}>${dt.coverBusy ? 'Uploading…' : lib.image_url ? '📷 Change photo' : '📷 Add photo'}</button></div>`;
+  return back + hero + `<div class="detail">
     <span class="badge b-${esc(lib.status)}">${esc(lib.status)}</span>${lib.recipe_type === 'snack/baking' ? ' <span class="badge b-snack">Snack/baking</span>' : ''}
     <h1 class="dtitle">${esc(lib.title)}</h1>
     ${dt.editTime ? `<form id="timeForm" class="inline-form timeform"><input class="field" name="t" value="${esc(dt.timeDraft ?? lib.total_time ?? '')}" placeholder="e.g. 35 min or 1 hr 20 min" aria-label="Total time" autocomplete="off">
@@ -697,6 +704,7 @@ document.addEventListener('click', async ev => {
       await mutate('quick_send', { p_id: q.id, p_who: S.who }, () => { q.status = 'ready_for_cart'; q.sent_by = S.who; q.sent_at = new Date().toISOString(); }, () => { ok = true; });
       if (ok) { notifyAssistant('send_to_cart', { week_id: q.id }); toast('🛒 Quick order sent!'); } break; }
     case 'quickReopen': mutate('quick_reopen', { p_id: d.quick.id }, () => { d.quick.status = 'picking'; }); break;
+    case 'coverPick': pickCover(id); break;
     case 'quickDiscard': if (window.confirm('Discard this quick order?')) mutate('quick_discard', { p_id: d.quick.id }, () => { d.quick = null; }); break;
     case 'batch': S.batches[id] = Math.max(1, Math.min(12, (S.batches[id] || 1) + +el.dataset.d)); render(); break;
     case 'snackAdd': {
@@ -875,6 +883,30 @@ async function downscale(file, max = 1600) {
     if (!blob) throw new Error('encode failed');
     return blob;
   } finally { URL.revokeObjectURL(src); }
+}
+function pickCover(id) {
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
+  inp.onchange = () => { const f = inp.files && inp.files[0]; if (f) uploadCover(id, f); };
+  inp.click();
+}
+async function uploadCover(id, file) {
+  if (!S.detail || S.detail.id !== id) return;
+  S.detail.coverBusy = true; render.force = true; render();
+  try {
+    const blob = await downscale(file, 1200);
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/photo-upload`, { method: 'POST',
+      headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: S.code, count: 1, target: 'cover' }) });
+    const body = await res.json();
+    if (!res.ok) { const e = new Error(body.message || 'upload failed'); e.code = body.code; throw e; }
+    const up = await fetch(body.uploads[0].upload_url, { method: 'PUT', headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'image/jpeg' }, body: blob });
+    if (!up.ok) throw new Error('photo failed to upload (' + up.status + ')');
+    const url = await rpc('set_recipe_cover', { p_id: id, p_path: body.uploads[0].path, p_who: S.who });
+    const lib = (S.data.recipes || []).find(x => x.id === id); if (lib) lib.image_url = url;
+    toast('📷 Photo added');
+  } catch (e) { handleErr(e); }
+  if (S.detail && S.detail.id === id) S.detail.coverBusy = false;
+  render.force = true; render();
 }
 async function savePhotos(btn) {
   const n = PHOTO.blobs.length; if (!n) return;
